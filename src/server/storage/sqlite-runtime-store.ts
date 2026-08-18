@@ -178,6 +178,39 @@ export class SqliteConnectionStore implements IConnectionStore {
     };
   }
 
+  async create(
+    service: string,
+    connectionName: string,
+    credential: ResolvedCredential,
+  ): Promise<StoredConnection | undefined> {
+    const row = this.database
+      .prepare(
+        `
+        insert into connections (id, revision, service, connection_name, value, updated_at)
+        values (?, ?, ?, ?, ?, ?)
+        on conflict(service, connection_name) do nothing
+        returning id, revision
+      `,
+      )
+      .get(
+        crypto.randomUUID(),
+        crypto.randomUUID(),
+        service,
+        connectionName,
+        await this.secretCodec.encode(JSON.stringify(credential)),
+        new Date().toISOString(),
+      );
+    return row
+      ? {
+          id: readString(row, "id"),
+          revision: readString(row, "revision"),
+          service,
+          connectionName,
+          credential,
+        }
+      : undefined;
+  }
+
   async updateCredential(input: StoredConnection): Promise<boolean> {
     const row = this.database
       .prepare(
@@ -204,6 +237,13 @@ export class SqliteConnectionStore implements IConnectionStore {
     this.database
       .prepare("delete from connections where service = ? and connection_name = ?")
       .run(service, connectionName);
+  }
+
+  async deleteIfRevision(input: StoredConnection): Promise<boolean> {
+    const result = this.database
+      .prepare("delete from connections where service = ? and connection_name = ? and id = ? and revision = ?")
+      .run(input.service, input.connectionName, input.id, input.revision);
+    return result.changes === 1;
   }
 
   async list(): Promise<StoredConnection[]> {

@@ -105,6 +105,40 @@ export class D1ConnectionStore implements IConnectionStore {
     };
   }
 
+  async create(
+    service: string,
+    connectionName: string,
+    credential: ResolvedCredential,
+  ): Promise<StoredConnection | undefined> {
+    const row = await this.database
+      .prepare(
+        `
+        insert into connections (id, revision, service, connection_name, value, updated_at)
+        values (?, ?, ?, ?, ?, ?)
+        on conflict(service, connection_name) do nothing
+        returning id, revision
+      `,
+      )
+      .bind(
+        crypto.randomUUID(),
+        crypto.randomUUID(),
+        service,
+        connectionName,
+        await this.secretCodec.encode(JSON.stringify(credential)),
+        new Date().toISOString(),
+      )
+      .first<RuntimeRow>();
+    return row
+      ? {
+          id: readString(row, "id"),
+          revision: readString(row, "revision"),
+          service,
+          connectionName,
+          credential,
+        }
+      : undefined;
+  }
+
   async updateCredential(input: StoredConnection): Promise<boolean> {
     const row = await this.database
       .prepare(
@@ -133,6 +167,14 @@ export class D1ConnectionStore implements IConnectionStore {
       .prepare("delete from connections where service = ? and connection_name = ?")
       .bind(service, connectionName)
       .run();
+  }
+
+  async deleteIfRevision(input: StoredConnection): Promise<boolean> {
+    const result = await this.database
+      .prepare("delete from connections where service = ? and connection_name = ? and id = ? and revision = ?")
+      .bind(input.service, input.connectionName, input.id, input.revision)
+      .run();
+    return result.meta.changes === 1;
   }
 
   async list(): Promise<StoredConnection[]> {

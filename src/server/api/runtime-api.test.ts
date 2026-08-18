@@ -73,6 +73,11 @@ describe("runtime action HTTP results", () => {
     ["provider_error", 500],
     ["internal_error", 500],
     ["oauth_token_expired", 409],
+    ["oauth_authorization_quarantined", 409],
+    ["oauth_client_mismatch", 409],
+    ["oauth_refresh_in_progress", 409],
+    ["oauth_refresh_quarantined", 409],
+    ["oauth_token_refresh_failed", 409],
     ["invalid_input", 400],
   ] as const)("maps %s execution failures to status %i", (code, status) => {
     expect(

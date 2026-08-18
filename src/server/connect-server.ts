@@ -17,7 +17,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { Scalar } from "@scalar/hono-api-reference";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
-import { ConnectionError, defaultConnectionName } from "../connection-service.ts";
+import { ConnectionError, defaultConnectionName, normalizeConnectionName } from "../connection-service.ts";
 import { ActionPolicyService, emptyPolicyRules } from "../core/action-policy.ts";
 import { DEFAULT_ACTION_SEARCH_LIMIT, createActionSearchIndexProvider, searchActions } from "../core/action-search.ts";
 import { optionalRecord, optionalString, requiredString } from "../core/cast.ts";
@@ -185,6 +185,7 @@ export class ConnectServer {
     });
 
     app.get("/api/connections", (context) => this.listConnections(context));
+    app.get("/api/connections/:service", (context) => this.getConnection(context, context.req.param("service")));
     app.put("/api/connections/:service", (context) => this.upsertConnection(context, context.req.param("service")));
     app.delete("/api/connections/:service", (context) => this.disconnect(context, context.req.param("service")));
 
@@ -469,7 +470,7 @@ export class ConnectServer {
     if (!policy.evaluate(action).allowed) {
       return writeRuntimeActionHttpResult(
         context,
-        await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant),
+        await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant, context.req.raw.signal),
       );
     }
     const idempotencyKey = readIdempotencyKey(context.req.header("idempotency-key"));
@@ -485,7 +486,7 @@ export class ConnectServer {
     if (!idempotencyKey.key) {
       return writeRuntimeActionHttpResult(
         context,
-        await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant),
+        await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant, context.req.raw.signal),
       );
     }
 
@@ -539,7 +540,14 @@ export class ConnectServer {
       return writeRuntimeActionHttpResult(context, claim.response);
     }
 
-    const result = await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant);
+    const result = await this.executeRuntimeAction(
+      actionId,
+      input,
+      connectionName,
+      policy,
+      runtimeGrant,
+      context.req.raw.signal,
+    );
     const completed = await this.options.idempotency.complete({
       keyHash,
       requestHash,
@@ -560,6 +568,7 @@ export class ConnectServer {
     connectionName: string | undefined,
     policy: ActionPolicySnapshot,
     runtimeGrant: RuntimeGrant | undefined,
+    signal: AbortSignal,
   ): Promise<RuntimeActionHttpResult> {
     try {
       const run = await this.options.actions.run({
@@ -569,6 +578,7 @@ export class ConnectServer {
         connectionName,
         policy,
         runtimeTokenId: runtimeGrant?.tokenId,
+        signal,
       });
       if (!run) {
         return serializeRuntimeFailure({
@@ -720,6 +730,21 @@ export class ConnectServer {
     return context.json(await this.options.connections.listConnections());
   }
 
+  private async getConnection(context: Context, service: string): Promise<Response> {
+    let alias: string;
+    try {
+      alias = readRequiredConnectorAlias(context);
+      const connection = await this.options.connections.getConnectionSummary(service, alias);
+      return connection ? context.json(connection) : notFound(context);
+    } catch (error) {
+      if (error instanceof ConnectionError) {
+        const status = mapConnectionErrorStatus(error) === 404 ? 404 : 400;
+        return jsonError(context, status, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
   private async upsertConnection(context: Context, service: string): Promise<Response> {
     const body = await readJsonBody(context);
     const authType = optionalString(body.authType);
@@ -789,6 +814,22 @@ export class ConnectServer {
       connectionName,
     };
     this.options.logger?.info(logContext, "connection disconnect started");
+    if (body.forceQuarantined === true) {
+      const connectionId = optionalString(body.connectionId);
+      if (!connectionId) {
+        return jsonError(context, 400, "invalid_input", "connectionId is required for quarantine deletion.");
+      }
+      return this.writeConnectionResult(
+        context,
+        this.options.connections.forceDeleteQuarantined(
+          service,
+          connectionName,
+          connectionId,
+          body.externalRevocationConfirmed === true,
+        ),
+        logContext,
+      );
+    }
     return this.writeConnectionResult(
       context,
       this.options.connections.disconnect(service, connectionName),
@@ -932,13 +973,11 @@ export class ConnectServer {
     this.options.logger?.info(logContext, "oauth callback received");
     const providerError = context.req.query("error");
     if (providerError) {
-      const providerErrorDescription = context.req.query("error_description");
+      await this.options.oauthFlow.discardAuthorization(state);
       this.options.logger?.warn(
         {
           ...logContext,
           errorCode: "oauth_provider_error",
-          providerError,
-          providerErrorDescription,
         },
         "oauth callback failed",
       );
@@ -946,10 +985,11 @@ export class ConnectServer {
         context,
         400,
         "oauth_provider_error",
-        `OAuth provider returned error "${providerError}"${providerErrorDescription ? `: ${providerErrorDescription}` : "."}`,
+        "OAuth provider denied or could not complete authorization.",
       );
     }
     if (!state || !code) {
+      await this.options.oauthFlow.discardAuthorization(state);
       this.options.logger?.warn(
         {
           ...logContext,
@@ -962,7 +1002,11 @@ export class ConnectServer {
 
     let service: string;
     try {
-      service = (await this.options.oauthFlow.completeAuthorization({ state, code })).service;
+      const callbackParameters: Record<string, string[]> = {};
+      for (const [key, value] of new URL(context.req.url).searchParams) {
+        (callbackParameters[key] ??= []).push(value);
+      }
+      service = (await this.options.oauthFlow.completeAuthorization({ state, code, callbackParameters })).service;
       this.options.logger?.info(
         {
           ...logContext,
@@ -1012,7 +1056,7 @@ export class ConnectServer {
             logContext.operation === "disconnect" ? "connection disconnect failed" : "connection failed",
           );
         }
-        return jsonError(context, error.code === "unknown_service" ? 404 : 400, error.code, error.message);
+        return jsonError(context, mapConnectionErrorStatus(error), error.code, error.message);
       }
 
       throw error;
@@ -1102,6 +1146,17 @@ function readConnectionName(context: Context, body?: Record<string, unknown>): s
     optionalString(context.req.query("connectionName")) ??
     optionalString(context.req.query("alias"))
   );
+}
+
+function readRequiredConnectorAlias(context: Context): string {
+  const values = context.req.raw.headers.get("x-oo-connector-alias");
+  if (!values) {
+    throw new ConnectionError("invalid_connection_name", "X-OO-Connector-Alias is required.");
+  }
+  if (values.includes(",")) {
+    throw new ConnectionError("invalid_connection_name", "X-OO-Connector-Alias must contain exactly one alias.");
+  }
+  return normalizeConnectionName(values);
 }
 
 type SearchQuery =

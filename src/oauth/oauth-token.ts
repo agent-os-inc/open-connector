@@ -8,6 +8,7 @@ const oauthTokenRequestTimeoutMs = 30_000;
 const oauthTokenResponseMaxBytes = 1024 * 1024;
 /** Longest `expires_in` we accept; anything larger overflows the ECMAScript `Date` range. */
 const maxExpiresInSeconds = 100 * 365 * 24 * 60 * 60;
+const definitiveTokenFailures = new WeakSet<object>();
 
 export interface OAuthTokenRequestOptions {
   clientId: string;
@@ -57,6 +58,11 @@ export async function requestRefreshToken(
 }
 
 async function requestToken(input: TokenRequest): Promise<Extract<ResolvedCredential, { authType: "oauth2" }>> {
+  const createDefinitiveError: OAuthTokenErrorFactory = (message) => {
+    const error = input.createError(message);
+    if (typeof error === "object" && error !== null) definitiveTokenFailures.add(error);
+    return error;
+  };
   const fields: Record<string, string> = { ...input.fields };
   const clientIdField = input.tokenRequestFields?.clientId;
   if (clientIdField !== false) {
@@ -108,7 +114,7 @@ async function requestToken(input: TokenRequest): Promise<Extract<ResolvedCreden
   const rawPayload = await readTokenPayload(response, input.createError);
   const payload = unwrapTokenPayload(rawPayload, input.responseEnvelope);
   if (!response.ok || !isEnvelopeSuccess(rawPayload, input.responseEnvelope)) {
-    throw input.createError(
+    throw createDefinitiveError(
       readTokenErrorMessage(rawPayload, payload, input.responseEnvelope) ?? "OAuth token request failed.",
     );
   }
@@ -129,6 +135,11 @@ async function requestToken(input: TokenRequest): Promise<Extract<ResolvedCreden
     },
     metadata: createTokenMetadata(payload),
   };
+}
+
+/** True only when the token endpoint definitively rejected the grant request. */
+export function isDefinitiveOAuthTokenFailure(error: unknown): boolean {
+  return typeof error === "object" && error !== null && definitiveTokenFailures.has(error);
 }
 
 async function readTokenPayload(

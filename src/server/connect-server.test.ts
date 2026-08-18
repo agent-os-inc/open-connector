@@ -10,6 +10,7 @@ import type {
   ResolvedCredential,
 } from "../core/types.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../oauth/oauth-client-config-service.ts";
+import type { IOAuthCredentialRefresher } from "../oauth/oauth-credential-refresh-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../oauth/oauth-flow-service.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
@@ -130,6 +131,88 @@ afterEach(() => {
 });
 
 describe("ConnectServer", () => {
+  it("returns exactly one redacted connection for the required admin alias header", async () => {
+    const app = createTestServer([apiKeyProvider], { auth: { adminToken: "admin-token" } }).createApp();
+    for (const alias of ["finance", "operations"]) {
+      const connected = await app.request("/api/connections/example", {
+        method: "PUT",
+        headers: { authorization: "Bearer admin-token", "content-type": "application/json" },
+        body: JSON.stringify({ authType: "api_key", alias, values: { apiKey: `secret-${alias}` } }),
+      });
+      expect(connected.status).toBe(200);
+    }
+
+    const response = await app.request("/api/connections/example", {
+      headers: { authorization: "Bearer admin-token", "X-OO-Connector-Alias": "finance" },
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      service: "example",
+      connectionName: "finance",
+      configured: true,
+    });
+    expect(JSON.stringify(body)).not.toContain("secret-finance");
+  });
+
+  it("rejects missing or ambiguous connection alias lookups and returns 404 for an absent alias", async () => {
+    const app = createTestServer([apiKeyProvider]).createApp();
+
+    const missing = await app.request("/api/connections/example");
+    const ambiguous = await app.request("/api/connections/example", {
+      headers: { "X-OO-Connector-Alias": "finance,operations" },
+    });
+    const absent = await app.request("/api/connections/example", {
+      headers: { "X-OO-Connector-Alias": "finance" },
+    });
+
+    expect(missing.status).toBe(400);
+    expect(ambiguous.status).toBe(400);
+    expect(absent.status).toBe(404);
+  });
+
+  it("returns the shared 409 status for a quarantined connection DELETE", async () => {
+    const provider: ProviderDefinition = {
+      ...oauthProvider,
+      auth: [
+        {
+          type: "oauth2",
+          authorizationUrl: "https://example.com/oauth/authorize",
+          tokenUrl: "https://example.com/oauth/token",
+          revocationUrl: "https://example.com/revoke",
+          revocationMode: "required",
+          scopes: ["read"],
+          tokenEndpointAuthMethod: "client_secret_post",
+        },
+      ],
+    };
+    const store = new MemoryConnectionStore();
+    await store.set("oauth_example", "default", {
+      authType: "oauth2",
+      accessToken: "access-token",
+      tokenType: "Bearer",
+      refreshToken: "refresh-token",
+      profile: { accountId: "oauth_example:oauth2", displayName: "Example", grantedScopes: [] },
+      metadata: {
+        oauthDisconnectLease: {
+          owner: "lease-owner",
+          phase: "outcome_unknown",
+          startedAt: new Date().toISOString(),
+        },
+      },
+    });
+    const app = createTestServer([provider], {
+      connectionStore: store,
+      oauthCredentials: { refresh: async (_service, value) => value, revoke: async () => undefined },
+    }).createApp();
+
+    const response = await app.request("/api/connections/oauth_example", { method: "DELETE" });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "oauth_revocation_quarantined" } });
+  });
+
   it("rejects connections for providers unavailable in the current runtime", async () => {
     const app = createTestServer([catalogOnlyProvider]).createApp();
 
@@ -921,7 +1004,29 @@ describe("ConnectServer", () => {
     });
     expect(document.components.schemas.ConnectionSummary).toMatchObject({
       properties: { id: expect.any(Object) },
-      required: expect.arrayContaining(["id"]),
+      required: expect.arrayContaining(["id", "connectionName", "default"]),
+    });
+    expect(document.paths["/api/connections/{service}"]).toMatchObject({
+      delete: {
+        responses: {
+          200: {
+            content: {
+              "application/json": {
+                schema: {
+                  anyOf: expect.arrayContaining([
+                    expect.objectContaining({
+                      required: expect.arrayContaining(["service", "connectionName", "configured"]),
+                    }),
+                  ]),
+                },
+              },
+            },
+          },
+          400: expect.any(Object),
+          409: expect.any(Object),
+          404: expect.any(Object),
+        },
+      },
     });
     expect(document.paths["/v1/actions/{actionId}"]?.post?.responses).toMatchObject({
       200: {
@@ -975,7 +1080,7 @@ describe("ConnectServer", () => {
     await expect(response.json()).resolves.toEqual({
       error: {
         code: "oauth_provider_error",
-        message: 'OAuth provider returned error "invalid_scope": The requested scope is invalid.',
+        message: "OAuth provider denied or could not complete authorization.",
       },
     });
   });
@@ -2973,6 +3078,8 @@ interface CreateTestServerOptions {
   runs?: MemoryRunLogStore;
   staticRoot?: string | false;
   transitFiles?: TransitFileService;
+  connectionStore?: IConnectionStore;
+  oauthCredentials?: IOAuthCredentialRefresher;
 }
 
 function createTestServer(providers: ProviderDefinition[], options: CreateTestServerOptions = {}): ConnectServer {
@@ -2985,8 +3092,9 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
   const runs = options.runs ?? new MemoryRunLogStore();
   const connections = new ConnectionService({
     catalog,
+    oauthCredentials: options.oauthCredentials,
     providerLoader,
-    store: new MemoryConnectionStore(),
+    store: options.connectionStore ?? new MemoryConnectionStore(),
   });
   const clientConfigs = new OAuthClientConfigService({
     catalog,
@@ -3211,6 +3319,15 @@ class MemoryConnectionStore implements IConnectionStore {
     return connection;
   }
 
+  async create(
+    service: string,
+    connectionName: string,
+    credential: ResolvedCredential,
+  ): Promise<StoredConnection | undefined> {
+    if (await this.get(service, connectionName)) return undefined;
+    return this.set(service, connectionName, credential);
+  }
+
   async updateCredential(input: StoredConnection): Promise<boolean> {
     const key = createConnectionKey(input.service, input.connectionName);
     const current = this.store.get(key);
@@ -3221,6 +3338,14 @@ class MemoryConnectionStore implements IConnectionStore {
 
   async delete(service: string, connectionName: string): Promise<void> {
     this.store.delete(createConnectionKey(service, connectionName));
+  }
+
+  async deleteIfRevision(input: StoredConnection): Promise<boolean> {
+    const key = createConnectionKey(input.service, input.connectionName);
+    const current = this.store.get(key);
+    if (current?.id !== input.id || current.revision !== input.revision) return false;
+    this.store.delete(key);
+    return true;
   }
 
   async list(): Promise<StoredConnection[]> {

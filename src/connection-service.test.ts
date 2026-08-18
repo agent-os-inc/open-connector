@@ -452,7 +452,7 @@ describe("ConnectionService", () => {
       refreshToken: "refresh-token",
       expiresAt: "2026-01-01T00:00:00.000Z",
       profile: testProfile,
-      metadata: { original: true },
+      metadata: { original: true, oauthClientId: "client-id" },
     });
 
     vi.stubGlobal(
@@ -509,7 +509,7 @@ describe("ConnectionService", () => {
       refreshToken: "refresh-token",
       expiresAt: "2026-01-01T00:00:00.000Z",
       profile: testProfile,
-      metadata: {},
+      metadata: { oauthClientId: "client-id" },
     });
 
     const fetcher = vi.fn(async () =>
@@ -528,6 +528,46 @@ describe("ConnectionService", () => {
       expect.objectContaining({ accessToken: "fresh-token" }),
     ]);
     expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("clears a refresh lease after definite HTTP rejection but quarantines transport ambiguity", async () => {
+    for (const testCase of [
+      { kind: "definitive", fetcher: async () => Response.json({ error: "invalid_grant" }, { status: 400 }) },
+      { kind: "ambiguous", fetcher: async () => Promise.reject(new TypeError("transport failed")) },
+    ] as const) {
+      const store = new MemoryConnectionStore();
+      const oauthClientConfigs = createOAuthClientConfigs([oauthProvider]);
+      const service = createService([oauthProvider], {
+        oauthCredentials: new OAuthCredentialRefreshService(oauthClientConfigs),
+        store,
+      });
+      await oauthClientConfigs.upsertConfig({
+        service: "example",
+        clientId: "client-id",
+        clientSecret: "client-secret",
+      });
+      await store.set("example", "default", {
+        authType: "oauth2",
+        accessToken: "expired-token",
+        tokenType: "Bearer",
+        refreshToken: "refresh-token",
+        expiresAt: "2026-01-01T00:00:00.000Z",
+        profile: testProfile,
+        metadata: { oauthClientId: "client-id" },
+      });
+      vi.stubGlobal("fetch", vi.fn(testCase.fetcher));
+
+      await expect(service.getCredential("example")).rejects.toMatchObject({ code: "oauth_token_refresh_failed" });
+      const stored = (await store.get("example", "default"))!;
+      expect(stored.credential.authType).toBe("oauth2");
+      if (stored.credential.authType !== "oauth2") throw new Error("expected OAuth credential");
+      if (testCase.kind === "definitive") {
+        expect(stored.credential.metadata).not.toHaveProperty("oauthRefreshLease");
+      } else {
+        expect(stored.credential.metadata.oauthRefreshLease).toMatchObject({ phase: "outcome_unknown" });
+      }
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not overwrite a connection recreated during OAuth refresh", async () => {
@@ -549,7 +589,7 @@ describe("ConnectionService", () => {
       refreshToken: "refresh-token",
       expiresAt: "2026-01-01T00:00:00.000Z",
       profile: testProfile,
-      metadata: {},
+      metadata: { oauthClientId: "client-id" },
     });
     let markRefreshStarted!: () => void;
     const refreshStarted = new Promise<void>((resolve) => {
@@ -577,7 +617,7 @@ describe("ConnectionService", () => {
       refreshToken: "replacement-refresh-token",
       expiresAt: "2099-01-01T00:00:00.000Z",
       profile: testProfile,
-      metadata: {},
+      metadata: { oauthClientId: "client-id" },
     });
     completeRefresh(
       Response.json({
@@ -587,7 +627,7 @@ describe("ConnectionService", () => {
       }),
     );
 
-    await expect(execution).rejects.toMatchObject({ code: "connection_not_found" });
+    await expect(execution).rejects.toMatchObject({ code: "oauth_refresh_quarantined" });
     expect(recreated.id).not.toBe(original.id);
     await expect(store.get("example", "default")).resolves.toMatchObject({
       id: recreated.id,
@@ -614,7 +654,7 @@ describe("ConnectionService", () => {
       refreshToken: "refresh-token",
       expiresAt: "2026-01-01T00:00:00.000Z",
       profile: testProfile,
-      metadata: {},
+      metadata: { oauthClientId: "client-id" },
     });
     let markOriginalRefreshStarted!: () => void;
     const originalRefreshStarted = new Promise<void>((resolve) => {
@@ -651,7 +691,7 @@ describe("ConnectionService", () => {
       refreshToken: "replacement-refresh-token",
       expiresAt: "2026-01-01T00:00:00.000Z",
       profile: testProfile,
-      metadata: {},
+      metadata: { oauthClientId: "client-id" },
     });
     const replacementExecution = service.resolveForExecution("example");
     await replacementRefreshStarted;
@@ -675,7 +715,7 @@ describe("ConnectionService", () => {
       }),
     );
 
-    await expect(originalExecution).rejects.toMatchObject({ code: "connection_not_found" });
+    await expect(originalExecution).rejects.toMatchObject({ code: "oauth_refresh_quarantined" });
     expect(replaced.id).toBe(original.id);
     expect(replaced.revision).not.toBe(original.revision);
     await expect(store.get("example", "default")).resolves.toMatchObject({
@@ -703,7 +743,7 @@ describe("ConnectionService", () => {
       refreshToken: "refresh-token",
       expiresAt: "2026-01-01T00:00:00.000Z",
       profile: testProfile,
-      metadata: {},
+      metadata: { oauthClientId: "client-id" },
     });
 
     vi.stubGlobal(
