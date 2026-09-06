@@ -6,9 +6,10 @@ import type {
   TransitFileWriter,
 } from "../../core/types.ts";
 import type { FeishuActionRuntimeContext } from "../feishu/shared/client.ts";
+import type { ProviderActionHandlerSubset } from "../provider-runtime.ts";
 
 import { Buffer } from "node:buffer";
-import { compactObject, optionalBoolean, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { compactObject, optionalBoolean, optionalRecord, optionalString } from "../../core/cast.ts";
 import { assertPublicHttpUrl, readBoundedResponseBytes } from "../../core/request.ts";
 import { createFeishuApplicationActionHandlers } from "../feishu/shared/application-runtime.ts";
 import { createFeishuBaseAdvancedActionHandlers } from "../feishu/shared/base-advanced-runtime.ts";
@@ -37,6 +38,8 @@ import { createFeishuWikiActionHandlers } from "../feishu/shared/wiki-runtime.ts
 import {
   createProviderProxyUrl,
   defineProviderExecutors,
+  getProviderActionHandler,
+  mapProviderActionHandlers,
   normalizeProviderProxyHeaders,
   providerFetch,
   ProviderRequestError,
@@ -44,6 +47,7 @@ import {
   readProviderProxyErrorMessage,
   readProviderProxyResponse,
   requireCustomCredential,
+  requiredInputString,
   toProviderProxyError,
 } from "../provider-runtime.ts";
 import { feishuAppBotActions, feishuAppBotProviderScopes } from "./actions.ts";
@@ -109,7 +113,7 @@ interface FeishuActionHandler {
 
 const feishuTenantAccessTokenCache = new Map<string, FeishuTenantAccessTokenCacheEntry>();
 
-export const feishuAppBotActionHandlers: Record<string, FeishuActionHandler> = {
+export const feishuAppBotActionHandlers: ProviderActionHandlerSubset<"feishu_app_bot", FeishuActionHandler> = {
   get_app_info(_input, context) {
     return getAppInfo(context);
   },
@@ -178,11 +182,12 @@ export const feishuAppBotActionHandlers: Record<string, FeishuActionHandler> = {
   },
 };
 
-const allFeishuAppBotActionHandlers: Record<string, FeishuActionHandler> = Object.fromEntries(
-  feishuAppBotActions.map((action) => [
-    action.name,
-    async (input: Record<string, unknown>, context: FeishuAppBotActionContext): Promise<unknown> => {
-      const nativeHandler = feishuAppBotActionHandlers[action.name];
+const allFeishuAppBotActionHandlers = mapProviderActionHandlers(
+  service,
+  feishuAppBotActions,
+  (action): FeishuActionHandler =>
+    async (input, context) => {
+      const nativeHandler = getProviderActionHandler(feishuAppBotActionHandlers, action.name);
       if (nativeHandler) {
         return nativeHandler(input, context);
       }
@@ -193,7 +198,6 @@ const allFeishuAppBotActionHandlers: Record<string, FeishuActionHandler> = Objec
       }
       return sharedHandler(input);
     },
-  ]),
 );
 
 export const executors: ProviderExecutors = defineProviderExecutors<FeishuAppBotActionContext>({
@@ -368,8 +372,8 @@ export const credentialValidators: CredentialValidators = {
 
 function readFeishuAppBotCredential(input: Record<string, string>): FeishuAppBotCredential {
   return {
-    appId: requiredFeishuString(input.appId, "appId"),
-    appSecret: requiredFeishuString(input.appSecret, "appSecret"),
+    appId: requiredInputString(input.appId, "appId"),
+    appSecret: requiredInputString(input.appSecret, "appSecret"),
   };
 }
 
@@ -493,7 +497,7 @@ async function uploadImage(
   input: Record<string, unknown>,
   context: FeishuAppBotActionContext,
 ): Promise<Record<string, unknown>> {
-  const source = await resolveFeishuImageUploadSource(requiredFeishuString(input.imageUrl, "imageUrl"), context);
+  const source = await resolveFeishuImageUploadSource(requiredInputString(input.imageUrl, "imageUrl"), context);
   const formData = new FormData();
   formData.set("image_type", feishuImageUploadType);
   formData.set("image", new File([Buffer.from(source.bytes)], source.fileName, { type: source.mimeType }));
@@ -514,12 +518,12 @@ async function uploadFile(
   context: FeishuAppBotActionContext,
 ): Promise<Record<string, unknown>> {
   const source = await resolveFeishuFileUploadSource(
-    requiredFeishuString(input.fileUrl, "fileUrl"),
+    requiredInputString(input.fileUrl, "fileUrl"),
     optionalString(input.fileName),
     context,
   );
   const formData = new FormData();
-  formData.set("file_type", requiredFeishuString(input.fileType, "fileType"));
+  formData.set("file_type", requiredInputString(input.fileType, "fileType"));
   formData.set("file_name", source.fileName);
   const duration = stringifyOptionalScalar(input.duration);
   if (duration) {
@@ -542,7 +546,7 @@ async function downloadImage(
   input: Record<string, unknown>,
   context: FeishuAppBotActionContext,
 ): Promise<Record<string, unknown>> {
-  const imageKey = requiredFeishuString(input.imageKey, "imageKey");
+  const imageKey = requiredInputString(input.imageKey, "imageKey");
   const rawResponse = await feishuRawRequest({
     method: "GET",
     path: `/im/v1/images/${encodeURIComponent(imageKey)}`,
@@ -566,7 +570,7 @@ async function downloadFile(
   input: Record<string, unknown>,
   context: FeishuAppBotActionContext,
 ): Promise<Record<string, unknown>> {
-  const fileKey = requiredFeishuString(input.fileKey, "fileKey");
+  const fileKey = requiredInputString(input.fileKey, "fileKey");
   const rawResponse = await feishuRawRequest({
     method: "GET",
     path: `/im/v1/files/${encodeURIComponent(fileKey)}`,
@@ -594,10 +598,10 @@ async function sendMessage(
     {
       method: "POST",
       path: "/im/v1/messages",
-      query: [["receive_id_type", requiredFeishuString(input.receiveIdType, "receiveIdType")]],
+      query: [["receive_id_type", requiredInputString(input.receiveIdType, "receiveIdType")]],
       body: compactObject({
-        receive_id: requiredFeishuString(input.receiveId, "receiveId"),
-        msg_type: requiredFeishuString(input.msgType, "msgType"),
+        receive_id: requiredInputString(input.receiveId, "receiveId"),
+        msg_type: requiredInputString(input.msgType, "msgType"),
         content: serializeFeishuContent(input.content),
         uuid: optionalString(input.uuid),
       }),
@@ -613,10 +617,10 @@ async function replyMessage(
   return callMessageEndpoint(
     {
       method: "POST",
-      path: `/im/v1/messages/${encodeURIComponent(requiredFeishuString(input.messageId, "messageId"))}/reply`,
+      path: `/im/v1/messages/${encodeURIComponent(requiredInputString(input.messageId, "messageId"))}/reply`,
       body: compactObject({
         content: serializeFeishuContent(input.content),
-        msg_type: requiredFeishuString(input.msgType, "msgType"),
+        msg_type: requiredInputString(input.msgType, "msgType"),
         reply_in_thread: optionalBoolean(input.replyInThread),
         uuid: optionalString(input.uuid),
       }),
@@ -632,7 +636,7 @@ async function getMessage(
   return executeFeishuRequest(
     {
       method: "GET",
-      path: `/im/v1/messages/${encodeURIComponent(requiredFeishuString(input.messageId, "messageId"))}`,
+      path: `/im/v1/messages/${encodeURIComponent(requiredInputString(input.messageId, "messageId"))}`,
       query: compactQueryPairs([
         ["user_id_type", optionalString(input.userIdType)],
         ["card_msg_content_type", optionalString(input.cardMsgContentType)],
@@ -651,8 +655,8 @@ async function listMessages(
       method: "GET",
       path: "/im/v1/messages",
       query: compactQueryPairs([
-        ["container_id_type", requiredFeishuString(input.containerIdType, "containerIdType")],
-        ["container_id", requiredFeishuString(input.containerId, "containerId")],
+        ["container_id_type", requiredInputString(input.containerIdType, "containerIdType")],
+        ["container_id", requiredInputString(input.containerId, "containerId")],
         ["start_time", stringifyOptionalScalar(input.startTime)],
         ["end_time", stringifyOptionalScalar(input.endTime)],
         ["sort_type", optionalString(input.sortType)],
@@ -693,7 +697,7 @@ async function searchChats(
       method: "GET",
       path: "/im/v1/chats/search",
       query: compactQueryPairs([
-        ["query", requiredFeishuString(input.query, "query")],
+        ["query", requiredInputString(input.query, "query")],
         ["user_id_type", optionalString(input.userIdType)],
         ["page_size", stringifyOptionalScalar(input.pageSize)],
         ["page_token", optionalString(input.pageToken)],
@@ -710,7 +714,7 @@ async function getChat(
   return executeFeishuRequest(
     {
       method: "GET",
-      path: `/im/v1/chats/${encodeURIComponent(requiredFeishuString(input.chatId, "chatId"))}`,
+      path: `/im/v1/chats/${encodeURIComponent(requiredInputString(input.chatId, "chatId"))}`,
       query: compactQueryPairs([["user_id_type", optionalString(input.userIdType)]]),
     },
     context,
@@ -724,7 +728,7 @@ async function listChatMembers(
   return executeFeishuRequest(
     {
       method: "GET",
-      path: `/im/v1/chats/${encodeURIComponent(requiredFeishuString(input.chatId, "chatId"))}/members`,
+      path: `/im/v1/chats/${encodeURIComponent(requiredInputString(input.chatId, "chatId"))}/members`,
       query: compactQueryPairs([
         ["member_id_type", optionalString(input.memberIdType)],
         ["page_size", stringifyOptionalScalar(input.pageSize)],
@@ -742,7 +746,7 @@ async function recallMessage(
   return executeFeishuRequest(
     {
       method: "DELETE",
-      path: `/im/v1/messages/${encodeURIComponent(requiredFeishuString(input.messageId, "messageId"))}`,
+      path: `/im/v1/messages/${encodeURIComponent(requiredInputString(input.messageId, "messageId"))}`,
     },
     context,
   );
@@ -755,9 +759,9 @@ async function editMessage(
   return callMessageEndpoint(
     {
       method: "PUT",
-      path: `/im/v1/messages/${encodeURIComponent(requiredFeishuString(input.messageId, "messageId"))}`,
+      path: `/im/v1/messages/${encodeURIComponent(requiredInputString(input.messageId, "messageId"))}`,
       body: {
-        msg_type: requiredFeishuString(input.msgType, "msgType"),
+        msg_type: requiredInputString(input.msgType, "msgType"),
         content: serializeFeishuContent(input.content),
       },
     },
@@ -772,10 +776,10 @@ async function addMessageReaction(
   return executeFeishuRequest(
     {
       method: "POST",
-      path: `/im/v1/messages/${encodeURIComponent(requiredFeishuString(input.messageId, "messageId"))}/reactions`,
+      path: `/im/v1/messages/${encodeURIComponent(requiredInputString(input.messageId, "messageId"))}/reactions`,
       body: {
         reaction_type: {
-          emoji_type: requiredFeishuString(input.emojiType, "emojiType"),
+          emoji_type: requiredInputString(input.emojiType, "emojiType"),
         },
       },
     },
@@ -790,7 +794,7 @@ async function listMessageReactions(
   return executeFeishuRequest(
     {
       method: "GET",
-      path: `/im/v1/messages/${encodeURIComponent(requiredFeishuString(input.messageId, "messageId"))}/reactions`,
+      path: `/im/v1/messages/${encodeURIComponent(requiredInputString(input.messageId, "messageId"))}/reactions`,
       query: compactQueryPairs([
         ["reaction_type", optionalString(input.reactionType)],
         ["page_token", optionalString(input.pageToken)],
@@ -809,7 +813,7 @@ async function removeMessageReaction(
   return executeFeishuRequest(
     {
       method: "DELETE",
-      path: `/im/v1/messages/${encodeURIComponent(requiredFeishuString(input.messageId, "messageId"))}/reactions/${encodeURIComponent(requiredFeishuString(input.reactionId, "reactionId"))}`,
+      path: `/im/v1/messages/${encodeURIComponent(requiredInputString(input.messageId, "messageId"))}/reactions/${encodeURIComponent(requiredInputString(input.reactionId, "reactionId"))}`,
     },
     context,
   );
@@ -824,7 +828,7 @@ async function pinMessage(
       method: "POST",
       path: "/im/v1/pins",
       body: {
-        message_id: requiredFeishuString(input.messageId, "messageId"),
+        message_id: requiredInputString(input.messageId, "messageId"),
       },
     },
     context,
@@ -840,7 +844,7 @@ async function listPins(
       method: "GET",
       path: "/im/v1/pins",
       query: compactQueryPairs([
-        ["chat_id", requiredFeishuString(input.chatId, "chatId")],
+        ["chat_id", requiredInputString(input.chatId, "chatId")],
         ["start_time", stringifyOptionalScalar(input.startTime)],
         ["end_time", stringifyOptionalScalar(input.endTime)],
         ["page_size", stringifyOptionalScalar(input.pageSize)],
@@ -858,7 +862,7 @@ async function removePin(
   return executeFeishuRequest(
     {
       method: "DELETE",
-      path: `/im/v1/pins/${encodeURIComponent(requiredFeishuString(input.messageId, "messageId"))}`,
+      path: `/im/v1/pins/${encodeURIComponent(requiredInputString(input.messageId, "messageId"))}`,
     },
     context,
   );
@@ -1186,10 +1190,6 @@ function serializeFeishuContent(value: unknown): string {
     throw new ProviderRequestError(400, "content must be a JSON string or object");
   }
   return JSON.stringify(objectValue);
-}
-
-function requiredFeishuString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function stringifyOptionalScalar(value: unknown): string | undefined {

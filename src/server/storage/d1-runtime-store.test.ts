@@ -1,11 +1,11 @@
 import type { RuntimeActionHttpResult } from "../api/runtime-api.ts";
 import type { D1DatabaseBinding, D1PreparedStatementBinding } from "../cloudflare/cloudflare-bindings.ts";
 
-import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { AesGcmSecretCodec } from "../secrets/secret-codec.ts";
 import { D1RuntimeDatabase } from "./d1-runtime-store.ts";
+import { defaultMigrationSource } from "./migration-source.ts";
 import { RuntimeTokenService } from "./runtime-token-service.ts";
 
 const githubProfile = {
@@ -32,6 +32,7 @@ describe("D1RuntimeDatabase", () => {
       service: "gmail",
       clientId: "client-id",
       clientSecret: "client-secret",
+      requestedScopes: ["gmail.readonly"],
       extra: { tenant: "default" },
       secretExtra: {},
     });
@@ -49,6 +50,7 @@ describe("D1RuntimeDatabase", () => {
     await expect(database.oauthClientConfigStore.get("gmail")).resolves.toMatchObject({
       clientId: "client-id",
       clientSecret: "client-secret",
+      requestedScopes: ["gmail.readonly"],
       extra: { tenant: "default" },
     });
     await expect(database.connectionStore.list()).resolves.toMatchObject([
@@ -133,6 +135,49 @@ describe("D1RuntimeDatabase", () => {
     await expect(database.oauthStateStore.take("state-1")).resolves.toBeUndefined();
   });
 
+  it("deletes OAuth states created before a cutoff", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database());
+    await database.oauthStateStore.set({
+      service: "gmail",
+      state: "expired",
+      createdAt: "2026-06-30T00:00:00.000Z",
+    });
+    await database.oauthStateStore.set({
+      service: "gmail",
+      state: "current",
+      createdAt: "2026-06-30T00:00:01.000Z",
+    });
+
+    await database.oauthStateStore.deleteCreatedBefore("2026-06-30T00:00:01.000Z");
+
+    await expect(database.oauthStateStore.take("expired")).resolves.toBeUndefined();
+    await expect(database.oauthStateStore.take("current")).resolves.toMatchObject({ state: "current" });
+  });
+
+  it("stores OAuth state through the secret codec", async () => {
+    const d1 = new SqliteD1Database();
+    const database = new D1RuntimeDatabase(d1, {
+      secretCodec: new AesGcmSecretCodec("local-test-key"),
+    });
+    await database.oauthStateStore.set({
+      service: "github",
+      state: "state-1",
+      createdAt: "2026-06-30T00:00:00.000Z",
+      clientConfig: {
+        service: "github",
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        extra: {},
+        secretExtra: {},
+      },
+    });
+
+    expect(d1.value("oauth_states", "state", "state-1")).not.toContain("client-secret");
+    await expect(database.oauthStateStore.take("state-1")).resolves.toMatchObject({
+      clientConfig: { clientSecret: "client-secret" },
+    });
+  });
+
   it("stores runtime token hashes and supports verification and revocation", async () => {
     const database = new D1RuntimeDatabase(new SqliteD1Database());
     const tokens = new RuntimeTokenService(database.runtimeTokenStore);
@@ -141,9 +186,11 @@ describe("D1RuntimeDatabase", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
+      allowedConnections: ["example:work"],
     });
     expect(created.token).toMatch(/^oct_/);
     expect(created.record.tokenHash).not.toBe(created.token);
+    expect(created.record.allowedConnections).toEqual(["example:work"]);
 
     await expect(tokens.verifyToken(created.token)).resolves.toBe(true);
     const [listed] = await tokens.listTokens();
@@ -153,25 +200,61 @@ describe("D1RuntimeDatabase", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
+      allowedConnections: ["example:work"],
     });
     expect(listed?.lastUsedAt).toBeTruthy();
+    await expect(tokens.resolveToken(created.token)).resolves.toMatchObject({
+      tokenId: created.record.id,
+      allowedConnections: ["example:work"],
+    });
 
     await expect(
       tokens.updateTokenPolicy(created.record.id, {
         allowedActions: ["github.get_current_user"],
         blockedActions: [],
         allowedProxies: ["slack"],
+        allowedConnections: ["example:personal"],
       }),
     ).resolves.toMatchObject({
       allowedActions: ["github.get_current_user"],
       blockedActions: [],
       allowedProxies: ["slack"],
+      allowedConnections: ["example:personal"],
+    });
+    await expect(tokens.resolveToken(created.token)).resolves.toMatchObject({
+      allowedConnections: ["example:personal"],
     });
 
     await expect(tokens.revokeToken(created.record.id)).resolves.toBe(true);
     await expect(tokens.listTokens()).resolves.toEqual([]);
     await expect(tokens.verifyToken(created.token)).resolves.toBe(false);
     await expect(tokens.revokeToken(created.record.id)).resolves.toBe(false);
+  });
+
+  it("defaults omitted allowedConnections to an unrestricted empty list", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database());
+    const tokens = new RuntimeTokenService(database.runtimeTokenStore);
+    const created = await tokens.createToken("Open token");
+    expect(created.record.allowedConnections).toEqual([]);
+    await expect(tokens.listTokens()).resolves.toMatchObject([{ allowedConnections: [] }]);
+    await expect(tokens.resolveToken(created.token)).resolves.toMatchObject({ allowedConnections: [] });
+  });
+
+  it("defaults missing allowedConnections to an unrestricted empty list", async () => {
+    const d1 = new SqliteD1Database();
+    d1.exec(
+      `insert into runtime_tokens (id, name, token_hash, created_at) values ('legacy-token', 'Legacy', 'legacy-hash', '2026-06-30T00:00:00.000Z')`,
+    );
+    const database = new D1RuntimeDatabase(d1);
+    await expect(database.runtimeTokenStore.list()).resolves.toMatchObject([
+      {
+        id: "legacy-token",
+        allowedActions: [],
+        blockedActions: [],
+        allowedProxies: [],
+        allowedConnections: [],
+      },
+    ]);
   });
 
   it("persists the singleton runtime policy", async () => {
@@ -421,6 +504,76 @@ describe("D1RuntimeDatabase", () => {
     });
     await expect(database.runLogStore.get("run-2")).resolves.toMatchObject({ id: "run-2" });
   });
+
+  it("upserts the marketplace config and provider preferences", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database());
+
+    await expect(database.marketplaceStore.getConfig()).resolves.toBeUndefined();
+
+    await database.marketplaceStore.setConfig({
+      discoveryUrl: "https://marketplace.example.com/discovery",
+      apiKeyEncrypted: "encrypted-one",
+      enabled: false,
+      createdAt: "2026-06-30T00:00:00.000Z",
+      updatedAt: "2026-06-30T00:00:00.000Z",
+    });
+    await database.marketplaceStore.setConfig({
+      discoveryUrl: "https://marketplace.example.com/discovery",
+      apiKeyEncrypted: "encrypted-two",
+      enabled: true,
+      createdAt: "2026-06-30T00:00:00.000Z",
+      updatedAt: "2026-06-30T00:00:05.000Z",
+    });
+
+    await expect(database.marketplaceStore.getConfig()).resolves.toEqual({
+      discoveryUrl: "https://marketplace.example.com/discovery",
+      apiKeyEncrypted: "encrypted-two",
+      enabled: true,
+      createdAt: "2026-06-30T00:00:00.000Z",
+      updatedAt: "2026-06-30T00:00:05.000Z",
+    });
+
+    await expect(database.marketplaceStore.listProviderPreferences()).resolves.toEqual([]);
+
+    await database.marketplaceStore.setProviderPreference({
+      service: "gmail",
+      enabled: true,
+      createdAt: "2026-06-30T00:00:00.000Z",
+      updatedAt: "2026-06-30T00:00:00.000Z",
+    });
+    await database.marketplaceStore.setProviderPreference({
+      service: "gmail",
+      enabled: false,
+      createdAt: "2026-06-30T00:00:09.000Z",
+      updatedAt: "2026-06-30T00:00:09.000Z",
+    });
+    await database.marketplaceStore.setProviderPreference({
+      service: "abuseipdb",
+      enabled: true,
+      createdAt: "2026-06-30T00:00:02.000Z",
+      updatedAt: "2026-06-30T00:00:02.000Z",
+    });
+
+    // Ordered by service, and the second gmail write keeps createdAt while replacing enabled/updatedAt.
+    await expect(database.marketplaceStore.listProviderPreferences()).resolves.toEqual([
+      {
+        service: "abuseipdb",
+        enabled: true,
+        createdAt: "2026-06-30T00:00:02.000Z",
+        updatedAt: "2026-06-30T00:00:02.000Z",
+      },
+      {
+        service: "gmail",
+        enabled: false,
+        createdAt: "2026-06-30T00:00:00.000Z",
+        updatedAt: "2026-06-30T00:00:09.000Z",
+      },
+    ]);
+
+    await database.marketplaceStore.deleteConfig();
+    await expect(database.marketplaceStore.getConfig()).resolves.toBeUndefined();
+    await expect(database.marketplaceStore.listProviderPreferences()).resolves.toHaveLength(2);
+  });
 });
 
 function createRun(id: string, startedAt: string, actionId = "hackernews.get_top_stories", service = "hackernews") {
@@ -452,26 +605,9 @@ class SqliteD1Database implements D1DatabaseBinding {
   private readonly database = new DatabaseSync(":memory:");
 
   constructor() {
-    this.database.exec(readFileSync(new URL("../../../migrations/0001_runtime.sql", import.meta.url), "utf8"));
-    this.database.exec(readFileSync(new URL("../../../migrations/0002_run_service.sql", import.meta.url), "utf8"));
-    this.database.exec(
-      readFileSync(new URL("../../../migrations/0003_action_idempotency.sql", import.meta.url), "utf8"),
-    );
-    this.database.exec(readFileSync(new URL("../../../migrations/0004_action_run_audit.sql", import.meta.url), "utf8"));
-    this.database.exec(readFileSync(new URL("../../../migrations/0005_run_retention.sql", import.meta.url), "utf8"));
-    this.database.exec(
-      readFileSync(new URL("../../../migrations/0006_connection_identity.sql", import.meta.url), "utf8"),
-    );
-    this.database.exec(readFileSync(new URL("../../../migrations/0007_runtime_policy.sql", import.meta.url), "utf8"));
-    this.database.exec(
-      readFileSync(new URL("../../../migrations/0008_runtime_token_policy.sql", import.meta.url), "utf8"),
-    );
-    this.database.exec(
-      readFileSync(new URL("../../../migrations/0009_runtime_token_proxy.sql", import.meta.url), "utf8"),
-    );
-    this.database.exec(
-      readFileSync(new URL("../../../migrations/0010_connection_revision.sql", import.meta.url), "utf8"),
-    );
+    for (const migration of defaultMigrationSource.readMigrations("sqlite")) {
+      this.database.exec(migration.sql);
+    }
   }
 
   prepare(query: string): D1PreparedStatementBinding {
@@ -483,8 +619,8 @@ class SqliteD1Database implements D1DatabaseBinding {
   }
 
   value(
-    table: "connections" | "oauth_client_configs" | "idempotency_records",
-    keyColumn: "service" | "key_hash",
+    table: "connections" | "oauth_client_configs" | "oauth_states" | "idempotency_records",
+    keyColumn: "service" | "state" | "key_hash",
     key: string,
     valueColumn: "value" | "response_value" = "value",
   ): string {

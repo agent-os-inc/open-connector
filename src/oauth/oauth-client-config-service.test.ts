@@ -26,6 +26,77 @@ describe("OAuthClientConfigService", () => {
       { service: "alpha", configured: false, clientId: null },
     ]);
   });
+
+  it("normalizes a requested scope subset and rejects provider-undeclared scopes", () => {
+    const service = new OAuthClientConfigService({
+      catalog: createCatalogStore([oauthProvider("example")]),
+      origin: "http://localhost:3000",
+      store: new MemoryOAuthClientConfigStore(),
+    });
+
+    expect(
+      service.normalizeConfig("example", {
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        requestedScopes: [" write ", "read", "write"],
+      }),
+    ).toMatchObject({ requestedScopes: ["write", "read"] });
+
+    expect(() =>
+      service.normalizeConfig("example", {
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        requestedScopes: ["admin"],
+      }),
+    ).toThrow("requestedScopes contains a scope not declared by example: admin.");
+  });
+
+  it("drops stored scopes the provider no longer declares instead of failing reads", async () => {
+    const store = new MemoryOAuthClientConfigStore();
+    await store.set({
+      service: "example",
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      requestedScopes: ["read", "removed"],
+      extra: {},
+      secretExtra: {},
+    });
+    const service = new OAuthClientConfigService({
+      catalog: createCatalogStore([oauthProvider("example")]),
+      origin: "http://localhost:3000",
+      store,
+    });
+
+    await expect(service.listConfigs()).resolves.toMatchObject([
+      { service: "example", requestedScopes: ["read", "removed"], effectiveScopes: ["read"] },
+    ]);
+    expect(
+      service.getEffectiveScopes("example", {
+        service: "example",
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        requestedScopes: ["removed"],
+        extra: {},
+        secretExtra: {},
+      }),
+    ).toEqual(["read", "write"]);
+  });
+
+  it("rejects an empty requested scope subset", () => {
+    const service = new OAuthClientConfigService({
+      catalog: createCatalogStore([oauthProvider("example")]),
+      origin: "http://localhost:3000",
+      store: new MemoryOAuthClientConfigStore(),
+    });
+
+    expect(() =>
+      service.normalizeConfig("example", {
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        requestedScopes: [],
+      }),
+    ).toThrow("requestedScopes must contain at least one scope.");
+  });
 });
 
 function oauthProvider(service: string): ProviderDefinition {
@@ -39,7 +110,7 @@ function oauthProvider(service: string): ProviderDefinition {
         type: "oauth2",
         authorizationUrl: "https://example.com/oauth/authorize",
         tokenUrl: "https://example.com/oauth/token",
-        scopes: ["read"],
+        scopes: ["read", "write"],
         tokenEndpointAuthMethod: "client_secret_post",
       },
     ],

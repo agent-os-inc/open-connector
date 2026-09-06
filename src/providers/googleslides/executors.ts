@@ -1,10 +1,15 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { OAuthProviderContext } from "../provider-runtime.ts";
-import type { GoogleSlidesActionName } from "./actions.ts";
 
 import { compactObject, objectArray, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
-import { googleJsonRequest } from "../googledrive/runtime-shared.ts";
-import { defineOAuthProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
+import { googleJsonRequest } from "../google-runtime.ts";
+import {
+  defineOAuthProviderExecutors,
+  defineProviderProxy,
+  providerInputError,
+  ProviderRequestError,
+} from "../provider-runtime.ts";
 
 export const slidesApiBaseUrl = "https://slides.googleapis.com/v1";
 export const googleDriveApiBaseUrl = "https://www.googleapis.com/drive/v3";
@@ -47,7 +52,7 @@ interface BatchUpdatePayload {
   writeControl?: Record<string, unknown>;
 }
 
-export const googleSlidesActionHandlers: Record<GoogleSlidesActionName, GoogleSlidesActionHandler> = {
+export const googleSlidesActionHandlers: ProviderActionHandlers<"googleslides", GoogleSlidesActionHandler> = {
   create_presentation: createPresentation,
   presentations_get: getPresentation,
   presentations_batch_update: batchUpdatePresentation,
@@ -125,7 +130,7 @@ async function batchUpdatePresentation(input: Record<string, unknown>, context: 
       context,
       method: "POST",
       body: compactObject({
-        requests: objectArray(input.requests, "requests", providerRequestError),
+        requests: objectArray(input.requests, "requests", providerInputError),
         writeControl: optionalRecord(input.writeControl),
       }),
     },
@@ -346,6 +351,8 @@ function requireString(value: string | undefined, message: string): string {
   throw new ProviderRequestError(502, message);
 }
 
-function providerRequestError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
-}
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://slides.googleapis.com/v1",
+  auth: { type: "oauth_bearer" },
+});

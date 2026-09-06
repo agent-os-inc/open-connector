@@ -296,7 +296,6 @@ export async function executeMailAction(
         const { summaries, nextBeforeUid } = await protocol.searchSummaries(credential, folder, criteria, {
           limit: searchInput.limit ?? defaultLimit,
           ...(searchInput.beforeUid !== undefined ? { beforeUid: searchInput.beforeUid } : {}),
-          peek: true,
         });
         return {
           folder,
@@ -308,9 +307,7 @@ export async function executeMailAction(
         const getInput = input as { folder?: string; uid: number };
         const folder = getInput.folder ?? defaultFolder;
         const message = await protocol.fetchMessage(credential, folder, getInput.uid, {
-          peek: true,
           maxBytes: mailMessageFetchByteLimit,
-          skipAttachmentBodies: true,
         });
         return {
           folder,
@@ -421,9 +418,7 @@ export async function executeMailAction(
         replyInput.folder = replyInput.folder ?? defaultFolder;
         replyInput.replyAll = replyInput.replyAll ?? false;
         const original = await protocol.fetchMessage(credential, replyInput.folder, replyInput.uid, {
-          peek: true,
           maxBytes: mailMessageFetchByteLimit,
-          skipAttachmentBodies: true,
         });
         const prepared = await buildReplySendInput(credential, original, replyInput, context);
         try {
@@ -436,9 +431,7 @@ export async function executeMailAction(
         const forwardInput = input as unknown as ParsedForwardInput;
         forwardInput.folder = forwardInput.folder ?? defaultFolder;
         const original = await protocol.fetchMessage(credential, forwardInput.folder, forwardInput.uid, {
-          peek: true,
           maxBytes: mailMessageFetchByteLimit,
-          skipAttachmentBodies: true,
         });
         const prepared = await buildForwardSendInput(original, forwardInput, context);
         try {
@@ -446,6 +439,14 @@ export async function executeMailAction(
         } finally {
           await prepared.cleanup();
         }
+      }
+      default: {
+        // A mail action name without a branch would otherwise fall off the
+        // switch and resolve to undefined, which the runtime reports as an
+        // empty success. The never assignment makes the compiler reject the
+        // next action name that skips this switch.
+        const exhaustiveActionName: never = actionName;
+        throw new ProviderRequestError(500, `Unsupported mail action: ${exhaustiveActionName}`);
       }
     }
   } catch (error) {
@@ -589,6 +590,7 @@ async function buildReplySendInput(
   }
 
   const cc = input.cc ?? (input.replyAll ? filterRecipientEmails(original.cc, credential.email) : undefined);
+  const referenceChain = buildReferenceChain(original);
   const resolvedAttachments = input.attachments ? await resolveOutgoingAttachments(input.attachments, context) : null;
   return {
     sendInput: {
@@ -598,16 +600,28 @@ async function buildReplySendInput(
       subject: input.subject ?? prefixSubject("Re:", original.summary.subject),
       ...(input.text !== undefined ? { text: buildReplyText(input.text, original) } : {}),
       ...(input.html !== undefined ? { html: buildReplyHtml(input.html, original) } : {}),
-      ...(original.summary.messageId
-        ? {
-            inReplyTo: original.summary.messageId,
-            references: original.summary.messageId,
-          }
-        : {}),
+      ...(original.summary.messageId ? { inReplyTo: original.summary.messageId } : {}),
+      ...(referenceChain ? { references: referenceChain } : {}),
       ...(resolvedAttachments ? { attachments: resolvedAttachments.attachments } : {}),
     },
     cleanup: resolvedAttachments?.cleanup ?? noop,
   };
+}
+
+/**
+ * Build the reply's `References` header: the parent's own chain with the parent's
+ * Message-ID appended (RFC 5322 section 3.6.4).
+ *
+ * Sending only the parent's Message-ID discards everything above it, which makes
+ * conformant clients start a fresh thread instead of continuing the existing one.
+ */
+function buildReferenceChain(original: MailFetchedMessage): string {
+  const messageId = original.summary.messageId;
+  const chain = original.references.filter((reference) => reference !== messageId);
+  if (messageId) {
+    chain.push(messageId);
+  }
+  return chain.join(" ");
 }
 
 async function buildForwardSendInput(

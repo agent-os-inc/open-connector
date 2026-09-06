@@ -1,6 +1,6 @@
 import type { CredentialValidationResult } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { GranolaActionName } from "./actions.ts";
 
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
@@ -12,12 +12,10 @@ import {
 
 export const granolaApiBaseUrl = "https://public-api.granola.ai";
 
-const granolaRequestTimeoutMs = 30_000;
-
 type GranolaActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 type GranolaRequestMode = "validate" | "execute";
 
-export const granolaActionHandlers: Record<GranolaActionName, GranolaActionHandler> = {
+export const granolaActionHandlers: ProviderActionHandlers<"granola", GranolaActionHandler> = {
   async list_notes(input, context) {
     const payload = await requestGranola(context, buildListNotesUrl(input), "execute");
     const record = asRecord(payload, "Granola notes response");
@@ -114,7 +112,7 @@ async function requestGranola(
   url: URL,
   mode: GranolaRequestMode,
 ): Promise<unknown> {
-  const timeout = createProviderTimeout(context.signal, granolaRequestTimeoutMs);
+  const timeout = createProviderTimeout(context.signal);
   let response: Response;
   try {
     response = await context.fetcher(url.toString(), {

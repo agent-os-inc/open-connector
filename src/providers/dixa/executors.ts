@@ -1,17 +1,22 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { DixaActionName } from "./actions.ts";
 
-import { optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import { encodePathSegment, queryParams } from "../../core/request.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerUserAgent,
+  ProviderRequestError,
+  requiredInputString,
+} from "../provider-runtime.ts";
 
 const service = "dixa";
 const dixaApiBaseUrl = "https://dev.dixa.io";
 
 type DixaActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const dixaActionHandlers: Record<DixaActionName, DixaActionHandler> = {
+export const dixaActionHandlers: ProviderActionHandlers<"dixa", DixaActionHandler> = {
   list_agents(input, context) {
     return dixaGetWrappedList("/v1/agents", buildUserListQuery(input), context);
   },
@@ -182,10 +187,6 @@ function buildEndUserListQuery(input: Record<string, unknown>): Record<string, s
     phone: optionalString(input.phone),
     externalId: optionalString(input.externalId),
   });
-}
-
-function requiredInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function requiredConversationId(value: unknown): string {

@@ -1,10 +1,15 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { GeckoboardActionName } from "./actions.ts";
 
 import { optionalRecord, optionalString } from "../../core/cast.ts";
 import { compactJson, jsonObject } from "../../core/request.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  isAbortLikeError,
+  providerUserAgent,
+  ProviderRequestError,
+} from "../provider-runtime.ts";
 
 const service = "geckoboard";
 const geckoboardApiBaseUrl = "https://api.geckoboard.com";
@@ -14,7 +19,7 @@ type GeckoboardPhase = "validate" | "execute";
 type GeckoboardActionContext = Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">;
 type GeckoboardActionHandler = (input: Record<string, unknown>, context: GeckoboardActionContext) => Promise<unknown>;
 
-export const geckoboardActionHandlers: Record<GeckoboardActionName, GeckoboardActionHandler> = {
+export const geckoboardActionHandlers: ProviderActionHandlers<"geckoboard", GeckoboardActionHandler> = {
   async find_or_create_dataset(input, context) {
     const datasetId = readInputString(input.datasetId, "datasetId");
     const payload = await requestGeckoboardJson({
@@ -254,8 +259,4 @@ function readResponseObject(value: unknown, fieldName: string): Record<string, u
     throw new ProviderRequestError(502, `Geckoboard response is missing ${fieldName}`, value);
   }
   return record;
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }

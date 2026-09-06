@@ -9,17 +9,19 @@ import type {
   RuntimeTokenSummary,
 } from "./model";
 import type { ThemeMode } from "./theme";
-import type { FormEvent, ReactNode } from "react";
+import type { ReactNode, SubmitEvent } from "react";
 
 import { useI18n, useLang, useTranslate } from "@embra/i18n/react";
 import {
   Activity,
   BookOpen,
   Cable,
+  Fingerprint,
   Home,
   KeyRound,
   Loader2,
   Monitor,
+  Store,
   Moon,
   RefreshCw,
   Sun,
@@ -32,7 +34,9 @@ import { ActionsPage } from "./actions-page";
 import { ApiError, apiGet, apiPost } from "./api";
 import oomolConnectLogoUrl from "./assets/oomol-connect-logo.png";
 import { persistLang, supportedLangs } from "./i18n";
+import { MarketplacePage } from "./marketplace-page";
 import { emptyData } from "./model";
+import { OAuthAppsPage } from "./oauth-apps-page";
 import { OverviewPage } from "./overview-page";
 import { ProvidersPage } from "./providers-page";
 import { ResourcesPage } from "./resources-page";
@@ -47,6 +51,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 const navItems = [
   { path: "/overview", labelKey: "nav.overview", icon: Home },
   { path: "/providers", labelKey: "nav.providers", icon: Cable },
+  { path: "/marketplace", labelKey: "nav.marketplace", icon: Store },
+  { path: "/oauth-apps", labelKey: "nav.oauthApps", icon: Fingerprint },
   { path: "/actions", labelKey: "nav.actions", icon: TerminalSquare },
   { path: "/runs", labelKey: "nav.runs", icon: Activity },
   { path: "/access", labelKey: "nav.access", icon: KeyRound },
@@ -138,7 +144,7 @@ export async function loadRuntimeData(
   unlockToken: string,
   cachedProviders?: ProviderDefinition[],
 ): Promise<RuntimeLoadResult> {
-  const authSession = await apiGet<AuthSession>("/api/auth/session", { bearerToken: unlockToken });
+  const authSession = await apiGet<AuthSession>("/api/auth/session", unlockToken);
   if (!authSession.authenticated) {
     return { authSession, data: emptyData };
   }
@@ -146,13 +152,24 @@ export async function loadRuntimeData(
   const catalogRequest =
     cachedProviders !== undefined ? Promise.resolve(cachedProviders) : apiGet<ProviderDefinition[]>("/api/providers");
 
-  const [providers, connections, oauthConfigs, runtimeTokens, runtimePolicy, runPage] = await Promise.all([
+  const [
+    providers,
+    connections,
+    oauthConfigs,
+    runtimeTokens,
+    runtimePolicy,
+    runPage,
+    marketplace,
+    providerPreferences,
+  ] = await Promise.all([
     catalogRequest,
     apiGet<ConnectionRecord[]>("/api/connections"),
     apiGet<OAuthConfig[]>("/api/oauth/configs"),
     apiGet<RuntimeTokenSummary[]>("/api/runtime-tokens"),
     apiGet<RuntimePolicyState>("/api/runtime-policy"),
     apiGet<RunLogPage>("/api/runs"),
+    apiGet<import("./model").MarketplaceState>("/api/marketplace"),
+    apiGet<import("./model").ProviderPreference[]>("/api/provider-preferences"),
   ]);
 
   return {
@@ -165,6 +182,8 @@ export async function loadRuntimeData(
       runtimePolicy,
       runs: runPage.items,
       runsNextCursor: runPage.nextCursor,
+      marketplace,
+      providerPreferences,
     },
   };
 }
@@ -327,7 +346,7 @@ function AppShell(props: {
   ]
     .filter(Boolean)
     .join(" ");
-  const currentNavItem = navItems.find((item) => item.path.slice(1) === heading) ?? navItems[0];
+  const currentNavItem = navItems.find((item) => item.labelKey === `nav.${heading}`) ?? navItems[0];
   const CurrentNavIcon = currentNavItem.icon;
 
   return (
@@ -398,10 +417,12 @@ function AppShell(props: {
             <Route index element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/providers" element={<ProvidersPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/marketplace" element={<MarketplacePage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/providers/:service"
               element={<ProvidersPage data={props.data} onRefresh={props.onRefresh} />}
             />
+            <Route path="/oauth-apps" element={<OAuthAppsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/actions" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/actions/:actionId" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
@@ -413,6 +434,7 @@ function AppShell(props: {
               element={
                 <AccessPage
                   providers={props.data.providers}
+                  connections={props.data.connections}
                   tokens={props.data.runtimeTokens}
                   policy={props.data.runtimePolicy ?? emptyData.runtimePolicy!}
                   onRefresh={props.onRefresh}
@@ -440,7 +462,7 @@ export function UnlockView(props: UnlockViewProps): ReactNode {
   const t = useTranslate();
   const [token, setToken] = useState("");
 
-  function submit(event: FormEvent): void {
+  function submit(event: SubmitEvent<HTMLFormElement>): void {
     event.preventDefault();
     props.onUnlock(token.trim());
   }
@@ -559,6 +581,12 @@ function headingForPath(pathname: string): string {
   const section = pathname.split("/").filter(Boolean)[0];
   if (section === "providers") {
     return "providers";
+  }
+  if (section === "marketplace") {
+    return "marketplace";
+  }
+  if (section === "oauth-apps") {
+    return "oauthApps";
   }
   if (section === "actions") {
     return "actions";

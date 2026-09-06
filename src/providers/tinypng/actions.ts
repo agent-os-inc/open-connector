@@ -7,9 +7,8 @@ const service = "tinypng";
 const nonEmptyString = (description: string) => s.string(description, { minLength: 1 });
 const downloadableFileSchema = s.object("A downloadable TinyPNG output file.", {
   name: s.string("The filename of the transformed image."),
-  mimetype: s.string("The MIME type of the transformed image."),
+  mimeType: s.string("The MIME type of the transformed image."),
   downloadUrl: s.string("The transit URL for downloading the transformed image."),
-  fileId: s.string("The local transit file identifier."),
   sizeBytes: s.integer("The transformed image size in bytes."),
 });
 const tinypngMimeTypeSchema = s.stringEnum("One TinyPNG output MIME type.", [

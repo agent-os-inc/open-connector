@@ -1,9 +1,18 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { OAuthProviderContext } from "../provider-runtime.ts";
 
 import { randomUUID } from "node:crypto";
+import { requiredRawString, requiredString } from "../../core/cast.ts";
 import { readBoundedResponseBytes } from "../../core/request.ts";
-import { defineOAuthProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
+import { googleJsonRequest, googleRequest } from "../google-runtime.ts";
+import {
+  defineOAuthProviderExecutors,
+  defineProviderProxy,
+  providerProxyEndpointPrefixes,
+  ProviderRequestError,
+  providerResponseError,
+} from "../provider-runtime.ts";
 import {
   createComment,
   createPermission,
@@ -37,8 +46,6 @@ import {
   asStringRecord,
   compactObject,
   compactUnknownObject,
-  googleJsonRequest,
-  googleRequest,
   optionalBoolean,
   optionalNestedString,
   optionalString,
@@ -50,6 +57,8 @@ import {
   resolveRequiredString,
   resolveSupportsAllDrives,
 } from "./runtime-shared.ts";
+
+const service = "googledrive";
 
 const driveApiBaseUrl = "https://www.googleapis.com/drive/v3";
 const driveUploadApiBaseUrl = "https://www.googleapis.com/upload/drive/v3";
@@ -86,12 +95,14 @@ type ActionContext = OAuthProviderContext;
 
 type ActionHandler = (input: Record<string, unknown>, context: ActionContext) => Promise<unknown>;
 
-const googledriveActionHandlers: Record<string, ActionHandler> = {
+const googledriveActionHandlers: ProviderActionHandlers<"googledrive", ActionHandler> = {
   "files.list"(input, { accessToken, fetcher }) {
     return listFiles(input, accessToken, fetcher);
   },
-  "files.get"(input, { accessToken, fetcher }) {
-    return getFileMetadata(input, accessToken, fetcher);
+  "files.get"(input, context) {
+    return input.alt === "media"
+      ? downloadFile(input, context)
+      : getFileMetadata(input, context.accessToken, context.fetcher);
   },
   "files.export"(input, context) {
     return exportFile(input, context);
@@ -218,7 +229,7 @@ const googledriveActionHandlers: Record<string, ActionHandler> = {
   },
 };
 
-export const executors: ProviderExecutors = defineOAuthProviderExecutors("googledrive", googledriveActionHandlers);
+export const executors: ProviderExecutors = defineOAuthProviderExecutors(service, googledriveActionHandlers);
 
 export const credentialValidators: CredentialValidators = {
   async oauth2(input, { fetcher, signal }) {
@@ -488,6 +499,67 @@ async function getFileMetadata(input: Record<string, unknown>, accessToken: stri
   return normalizeDriveFile(payload);
 }
 
+async function downloadFile(input: Record<string, unknown>, context: ActionContext) {
+  if (!context.transitFiles) {
+    throw new ProviderRequestError(400, "files.get with alt=media requires local transit file storage.");
+  }
+
+  const includeSharedDrives = resolveSupportsAllDrives(input);
+  const metadata = await fetchDriveFile(
+    resolveFileId(input),
+    context.accessToken,
+    context.fetcher,
+    includeSharedDrives,
+    context.signal,
+  );
+  const fileId = requiredString(metadata.id, "Google Drive file metadata id", providerResponseError);
+  const name = requiredRawString(metadata.name, "Google Drive file metadata name", providerResponseError);
+  if (name.length === 0) {
+    throw providerResponseError("Google Drive file metadata name must not be empty");
+  }
+  const mimeType = requiredString(metadata.mimeType, "Google Drive file metadata MIME type", providerResponseError);
+  if (mimeType.toLowerCase().startsWith("application/vnd.google-apps.")) {
+    throw new ProviderRequestError(
+      400,
+      "Google Workspace-native files cannot be downloaded with files.get alt=media. Use files.export when supported.",
+    );
+  }
+
+  const reportedSizeBytes = parseSizeBytes(metadata.size);
+  if (reportedSizeBytes !== null && reportedSizeBytes > context.transitFiles.maxBytes) {
+    throw new ProviderRequestError(
+      413,
+      `Google Drive file exceeds local transit limit of ${context.transitFiles.maxBytes} bytes`,
+    );
+  }
+
+  const response = await googleRequest(`${driveApiBaseUrl}/files/${fileId}`, {
+    accessToken: context.accessToken,
+    fetcher: context.fetcher,
+    signal: context.signal,
+    query: compactObject({
+      alt: "media",
+      supportsAllDrives: String(includeSharedDrives),
+      acknowledgeAbuse: optionalBoolean(input.acknowledgeAbuse)?.toString(),
+    }),
+    timeoutMs: 300_000,
+  });
+  const bytes = await readBoundedResponseBytes(response, {
+    maxBytes: context.transitFiles.maxBytes,
+    fieldName: "Google Drive download",
+    createError: (message) => new ProviderRequestError(413, message),
+  });
+  const file = await context.transitFiles.create(new File([Uint8Array.from(bytes)], name, { type: mimeType }));
+
+  return {
+    fileId,
+    name,
+    mimeType,
+    sizeBytes: file.sizeBytes,
+    file,
+  };
+}
+
 async function exportFile(input: Record<string, unknown>, context: ActionContext) {
   if (!context.transitFiles) {
     throw new ProviderRequestError(400, "files.export requires local transit file storage.");
@@ -684,10 +756,12 @@ async function fetchDriveFile(
   accessToken: string,
   fetcher: typeof fetch,
   includeSharedDrives: boolean,
+  signal?: AbortSignal,
 ) {
   return googleJsonRequest<Record<string, unknown>>(`${driveApiBaseUrl}/files/${fileId}`, {
     accessToken,
     fetcher,
+    signal,
     query: {
       fields: driveFileFields,
       supportsAllDrives: String(includeSharedDrives),
@@ -962,3 +1036,10 @@ function normalizeApproval(payload: Record<string, unknown>) {
     requesterEmailAddress: optionalString(payload.requesterEmailAddress) ?? null,
   };
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://www.googleapis.com",
+  auth: { type: "oauth_bearer" },
+  allowedEndpoint: providerProxyEndpointPrefixes("/drive/v3", "/upload/drive/v3"),
+});

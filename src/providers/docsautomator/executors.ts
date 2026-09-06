@@ -11,9 +11,11 @@ import {
 } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
+  providerResponseError,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
+  requiredResponseRecord,
 } from "../provider-runtime.ts";
 
 const service = "docsautomator";
@@ -109,7 +111,7 @@ async function createDocument(
 }
 
 async function getDocumentJob(input: Record<string, unknown>, context: DocsautomatorContext): Promise<unknown> {
-  const jobId = requiredString(input.jobId, "jobId", providerError);
+  const jobId = requiredString(input.jobId, "jobId", providerResponseError);
   const payload = await request({
     path: `/job/${encodeURIComponent(jobId)}`,
     apiKey: context.apiKey,
@@ -117,7 +119,7 @@ async function getDocumentJob(input: Record<string, unknown>, context: Docsautom
     signal: context.signal,
     phase: "execute",
   });
-  const raw = readObject(payload, "job");
+  const raw = requiredResponseRecord(payload, "job");
   return {
     job: normalizeJob(raw),
     document: raw.result == null ? null : normalizeDocument(raw.result),
@@ -146,7 +148,7 @@ async function listAutomations(context: DocsautomatorContext): Promise<unknown> 
     signal: context.signal,
     phase: "execute",
   });
-  const record = readObject(payload, "automations response");
+  const record = requiredResponseRecord(payload, "automations response");
   const items = Array.isArray(record.automations) ? record.automations : [];
   return { automations: items.map((item, index) => normalizeAutomation(item, `automations[${index}]`)) };
 }
@@ -160,7 +162,9 @@ async function getAutomation(input: Record<string, unknown>, context: Docsautoma
     phase: "execute",
     query: buildAutomationQuery(input),
   });
-  return { automation: normalizeAutomation(readObject(payload, "automation response").automation, "automation") };
+  return {
+    automation: normalizeAutomation(requiredResponseRecord(payload, "automation response").automation, "automation"),
+  };
 }
 
 async function listTemplatePlaceholders(
@@ -175,7 +179,10 @@ async function listTemplatePlaceholders(
     phase: "execute",
     query: buildAutomationQuery(input),
   });
-  const placeholders = readObject(readObject(payload, "placeholders response").placeholders, "placeholders");
+  const placeholders = requiredResponseRecord(
+    requiredResponseRecord(payload, "placeholders response").placeholders,
+    "placeholders",
+  );
   return {
     placeholders: Object.fromEntries(
       Object.entries(placeholders).map(([key, value]) => [
@@ -280,24 +287,24 @@ function buildAutomationQuery(input: Record<string, unknown>): Record<string, un
 }
 
 function pickAutomationId(input: Record<string, unknown>): string {
-  return optionalString(input.automationId) ?? requiredString(input.docId, "docId", providerError);
+  return optionalString(input.automationId) ?? requiredString(input.docId, "docId", providerResponseError);
 }
 
 function normalizeAsyncJobHandle(payload: unknown): Record<string, unknown> {
-  const record = readObject(payload, "job handle");
+  const record = requiredResponseRecord(payload, "job handle");
   return {
     message: nullableText(record.message),
-    jobId: requiredString(record.jobId, "jobId", providerError),
+    jobId: requiredString(record.jobId, "jobId", providerResponseError),
     logId: nullableText(record.logId),
     raw: record,
   };
 }
 
 function normalizeJob(payload: unknown): Record<string, unknown> {
-  const record = readObject(payload, "job");
+  const record = requiredResponseRecord(payload, "job");
   return {
-    jobId: requiredString(record.jobId, "jobId", providerError),
-    status: requiredString(record.status, "status", providerError),
+    jobId: requiredString(record.jobId, "jobId", providerResponseError),
+    status: requiredString(record.status, "status", providerResponseError),
     progress: optionalIntegerOrNull(record.progress),
     createdAt: nullableText(record.createdAt),
     processedOn: nullableText(record.processedOn),
@@ -309,7 +316,7 @@ function normalizeJob(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeDocument(payload: unknown): Record<string, unknown> {
-  const record = readObject(payload, "document result");
+  const record = requiredResponseRecord(payload, "document result");
   const rawSigningLinks = Array.isArray(record.signingLinks) ? record.signingLinks : [];
   return {
     message: nullableText(record.message),
@@ -326,7 +333,7 @@ function normalizeDocument(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeSigningLink(payload: unknown): Record<string, unknown> {
-  const record = readObject(payload, "signing link");
+  const record = requiredResponseRecord(payload, "signing link");
   return {
     signerIndex: optionalIntegerOrNull(record.signerIndex),
     email: nullableText(record.email),
@@ -337,7 +344,7 @@ function normalizeSigningLink(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeQueueStats(payload: unknown): Record<string, unknown> {
-  const record = readObject(payload, "queue stats");
+  const record = requiredResponseRecord(payload, "queue stats");
   return {
     waiting: requiredInteger(record.waiting, "waiting"),
     active: requiredInteger(record.active, "active"),
@@ -349,9 +356,9 @@ function normalizeQueueStats(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeAutomation(payload: unknown, fieldName: string): Record<string, unknown> {
-  const record = readObject(payload, fieldName);
+  const record = requiredResponseRecord(payload, fieldName);
   return {
-    id: requiredString(record._id, `${fieldName}._id`, providerError),
+    id: requiredString(record._id, `${fieldName}._id`, providerResponseError),
     title: nullableText(record.title),
     dataSourceName: nullableText(record.dataSourceName),
     dataSource: optionalRecord(record.dataSource) ?? null,
@@ -369,12 +376,6 @@ function normalizeAutomation(payload: unknown, fieldName: string): Record<string
   };
 }
 
-function readObject(value: unknown, fieldName: string): Record<string, unknown> {
-  const record = optionalRecord(value);
-  if (!record) throw new ProviderRequestError(502, `${fieldName} must be an object`);
-  return record;
-}
-
 function requiredInteger(value: unknown, fieldName: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) throw new ProviderRequestError(502, `${fieldName} must be an integer`);
@@ -383,8 +384,4 @@ function requiredInteger(value: unknown, fieldName: string): number {
 
 function nullableText(value: unknown): string | null {
   return value == null ? null : (optionalString(value) ?? null);
-}
-
-function providerError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
 }

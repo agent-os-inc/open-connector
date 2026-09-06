@@ -1,8 +1,11 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { optionalBoolean, optionalRecord, optionalString, requiredRecord, requiredString } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
+  isAbortLikeError,
+  providerResponseError,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
@@ -23,7 +26,7 @@ interface ChecklyContext {
 
 type ChecklyHandler = (input: Record<string, unknown>, context: ChecklyContext) => Promise<unknown>;
 
-export const checklyActionHandlers: Record<string, ChecklyHandler> = {
+export const checklyActionHandlers: ProviderActionHandlers<"checkly", ChecklyHandler> = {
   async get_current_account(_input, context) {
     return { account: await requestChecklyJson({ context, path: "/v1/accounts/me", phase: "execute" }) };
   },
@@ -70,7 +73,7 @@ export const checklyActionHandlers: Record<string, ChecklyHandler> = {
           phase: "execute",
         }),
         "checkly check status response",
-        providerError,
+        providerResponseError,
       ),
     };
   },
@@ -95,7 +98,7 @@ export const checklyActionHandlers: Record<string, ChecklyHandler> = {
           phase: "execute",
         }),
         "checkly check result response",
-        providerError,
+        providerResponseError,
       ),
     };
   },
@@ -126,7 +129,7 @@ export const credentialValidators: CredentialValidators = {
     const account = requiredRecord(
       await requestChecklyJson({ context, path: "/v1/accounts/me", phase: "validate" }),
       "checkly account response",
-      providerError,
+      providerResponseError,
     );
     const accountId = optionalString(account.id) ?? context.accountId;
 
@@ -251,12 +254,4 @@ function resolveAccountId(value: unknown): string {
   const accountId = optionalString(value);
   if (!accountId) throw new ProviderRequestError(400, "checkly accountId is required");
   return accountId;
-}
-
-function providerError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }

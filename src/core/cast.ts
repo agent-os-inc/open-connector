@@ -246,6 +246,16 @@ export function optionalNumber(value: unknown): number | undefined {
 }
 
 /**
+ * Return a finite number from a number or numeric string when present. Examples:
+ * `optionalNumberLike("1.5") => 1.5`, `optionalNumberLike("x") => undefined`.
+ */
+export function optionalNumberLike(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" && value !== "" ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
  * Return an integer from a number or numeric string. Examples:
  * `integer("2", "count") => 2`, `integer("x", "count")` throws.
  */
@@ -391,13 +401,17 @@ export function optionalStringOrNull(value: unknown): string | null {
 }
 
 /**
- * Return an integer from an integer number or numeric string, or null.
+ * Return an integer from an integer number or numeric string, or null. Examples:
+ * `optionalIntegerOrNull("2") => 2`, `optionalIntegerOrNull("") => null`.
+ *
+ * A blank string is reported as missing rather than parsed, because `Number("")`
+ * is `0` and an empty field would otherwise reach a provider as a real zero.
  */
 export function optionalIntegerOrNull(value: unknown): number | null {
   if (Number.isInteger(value)) {
     return value as number;
   }
-  if (typeof value === "string") {
+  if (typeof value === "string" && value.trim() !== "") {
     const parsed = Number(value);
     return Number.isInteger(parsed) ? parsed : null;
   }
@@ -424,4 +438,36 @@ export function positiveInteger(
   }
 
   throw createError(`${fieldName} must be a positive integer`);
+}
+
+/**
+ * Return the value when it is an array, otherwise an empty array. Example:
+ * `looseArray([1]) => [1]`, `looseArray("x") => []`.
+ */
+export function looseArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * Return a string exactly as provided, or `null` for any other value. Examples:
+ * `rawStringOrNull("") => ""`, `rawStringOrNull(1) => null`.
+ */
+export function rawStringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * Return a plain object record, or an empty record for any other value. Example:
+ * `recordOrEmpty([]) => {}`.
+ */
+export function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return optionalRecord(value) ?? {};
+}
+
+/**
+ * Return a boolean rendered as `"true"` / `"false"` for query parameters, or
+ * undefined for any other value.
+ */
+export function booleanString(value: unknown): string | undefined {
+  return typeof value === "boolean" ? String(value) : undefined;
 }

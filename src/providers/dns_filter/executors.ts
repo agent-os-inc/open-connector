@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { DnsFilterActionName } from "./actions.ts";
 
 import {
   optionalBoolean,
@@ -21,12 +21,11 @@ import {
 
 const service = "dns_filter";
 const dnsFilterApiBaseUrl = "https://api.dnsfilter.com";
-const dnsFilterRequestTimeoutMs = 30_000;
 
 type DnsFilterRequestPhase = "validate" | "execute";
 type DnsFilterActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const dnsFilterActionHandlers: Record<DnsFilterActionName, DnsFilterActionHandler> = {
+export const dnsFilterActionHandlers: ProviderActionHandlers<"dns_filter", DnsFilterActionHandler> = {
   get_current_user(_input, context) {
     return getCurrentUser(context);
   },
@@ -221,7 +220,7 @@ async function dnsFilterFetch(input: {
     url.search = input.query.toString();
   }
 
-  const timeout = createProviderTimeout(input.signal, dnsFilterRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.signal);
   try {
     return await input.fetcher(url, {
       method: "GET",

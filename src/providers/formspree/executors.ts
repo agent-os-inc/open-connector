@@ -1,9 +1,10 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
-import type { FormspreeActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { compactObject, optionalBoolean, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
+  isAbortLikeError,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
@@ -21,7 +22,7 @@ interface FormspreeContext {
 
 type FormspreeActionHandler = (input: Record<string, unknown>, context: FormspreeContext) => Promise<unknown>;
 
-export const formspreeActionHandlers: Record<FormspreeActionName, FormspreeActionHandler> = {
+export const formspreeActionHandlers: ProviderActionHandlers<"formspree", FormspreeActionHandler> = {
   list_submissions(input, context) {
     return listSubmissions(input, context);
   },
@@ -270,8 +271,4 @@ function extractErrorMessage(payload: unknown): string | undefined {
   return record
     ? (optionalString(record.message) ?? optionalString(record.error) ?? optionalString(record.detail))
     : undefined;
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }

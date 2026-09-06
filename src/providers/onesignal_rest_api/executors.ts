@@ -1,5 +1,5 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
-import type { OnesignalRestApiActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { compactObject, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
@@ -14,7 +14,6 @@ import {
 const service = "onesignal_rest_api";
 const onesignalRestApiBaseUrl = "https://api.onesignal.com";
 const onesignalValidationPath = "/notifications";
-const onesignalDefaultRequestTimeoutMs = 30_000;
 
 type OneSignalRequestPhase = "validate" | "execute";
 type OneSignalActionHandler = (input: Record<string, unknown>, context: OneSignalContext) => Promise<unknown>;
@@ -35,7 +34,7 @@ interface OneSignalRequestInput {
   body?: Record<string, unknown>;
 }
 
-export const onesignalRestApiActionHandlers: Record<OnesignalRestApiActionName, OneSignalActionHandler> = {
+export const onesignalRestApiActionHandlers: ProviderActionHandlers<"onesignal_rest_api", OneSignalActionHandler> = {
   create_push_notification(input, context) {
     ensureAppIdIsNotOverridden(input);
     ensureCreatePushNotificationBody(input);
@@ -146,7 +145,7 @@ export const credentialValidators: CredentialValidators = {
 };
 
 async function requestOneSignalJson(input: OneSignalRequestInput): Promise<Record<string, unknown>> {
-  const timeout = createProviderTimeout(input.context.signal, onesignalDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
 
   try {
     const headers = new Headers({

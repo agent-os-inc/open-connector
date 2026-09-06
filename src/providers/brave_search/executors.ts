@@ -1,17 +1,15 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext, ProviderRuntimeHandler } from "../provider-runtime.ts";
-import type { BraveSearchActionName } from "./actions.ts";
 
+import { compactObject, optionalBoolean, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
-  compactObject,
-  optionalBoolean,
-  optionalInteger,
-  optionalRecord,
-  optionalString,
-  requiredRecord,
-  requiredString,
-} from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+  defineApiKeyProviderExecutors,
+  providerUserAgent,
+  ProviderRequestError,
+  requiredInputString,
+  requiredResponseRecord,
+} from "../provider-runtime.ts";
 
 const service = "brave_search";
 const braveSearchApiBaseUrl = "https://api.search.brave.com";
@@ -20,7 +18,7 @@ type BraveSearchPhase = "validate" | "execute";
 type BraveSearchQueryValue = boolean | number | string | string[] | undefined;
 type BraveSearchActionHandler = ProviderRuntimeHandler<ApiKeyProviderContext>;
 
-export const braveSearchActionHandlers: Record<BraveSearchActionName, BraveSearchActionHandler> = {
+export const braveSearchActionHandlers: ProviderActionHandlers<"brave_search", BraveSearchActionHandler> = {
   async web_search(input, context) {
     const payload = await requestBraveSearchJson("/res/v1/web/search", buildWebSearchQuery(input), context, "execute");
     return normalizeWebSearchResponse(payload);
@@ -143,7 +141,7 @@ function buildBraveSearchUrl(path: string, query: Record<string, BraveSearchQuer
 
 function buildWebSearchQuery(input: Record<string, unknown>): Record<string, BraveSearchQueryValue> {
   return compactObject({
-    q: readRequiredString(input.q, "q"),
+    q: requiredInputString(input.q, "q"),
     search_lang: optionalString(input.search_lang),
     ui_lang: optionalString(input.ui_lang),
     country: optionalString(input.country),
@@ -164,7 +162,7 @@ function buildWebSearchQuery(input: Record<string, unknown>): Record<string, Bra
 
 function buildNewsSearchQuery(input: Record<string, unknown>): Record<string, BraveSearchQueryValue> {
   return compactObject({
-    q: readRequiredString(input.q, "q"),
+    q: requiredInputString(input.q, "q"),
     search_lang: optionalString(input.search_lang),
     ui_lang: optionalString(input.ui_lang),
     country: optionalString(input.country),
@@ -182,7 +180,7 @@ function buildNewsSearchQuery(input: Record<string, unknown>): Record<string, Br
 
 function buildVideoSearchQuery(input: Record<string, unknown>): Record<string, BraveSearchQueryValue> {
   return compactObject({
-    q: readRequiredString(input.q, "q"),
+    q: requiredInputString(input.q, "q"),
     search_lang: optionalString(input.search_lang),
     ui_lang: optionalString(input.ui_lang),
     country: optionalString(input.country),
@@ -198,7 +196,7 @@ function buildVideoSearchQuery(input: Record<string, unknown>): Record<string, B
 
 function buildImageSearchQuery(input: Record<string, unknown>): Record<string, BraveSearchQueryValue> {
   return compactObject({
-    q: readRequiredString(input.q, "q"),
+    q: requiredInputString(input.q, "q"),
     search_lang: optionalString(input.search_lang),
     country: optionalString(input.country),
     safesearch: optionalString(input.safesearch),
@@ -208,7 +206,7 @@ function buildImageSearchQuery(input: Record<string, unknown>): Record<string, B
 }
 
 function normalizeWebSearchResponse(payload: unknown): Record<string, unknown> {
-  const record = requireOutputRecord(payload, "Brave Search response");
+  const record = requiredResponseRecord(payload, "Brave Search response");
 
   return compactObject({
     type: optionalString(record.type) ?? "search",
@@ -227,7 +225,7 @@ function normalizeWebSearchResponse(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeCollectionResponse(payload: unknown): Record<string, unknown> {
-  const record = requireOutputRecord(payload, "Brave Search response");
+  const record = requiredResponseRecord(payload, "Brave Search response");
 
   return compactObject({
     type: optionalString(record.type) ?? "search",
@@ -310,11 +308,7 @@ function optionalObjectArray(value: unknown): Array<Record<string, unknown>> | u
   if (!Array.isArray(value)) {
     return undefined;
   }
-  return value.map((item) => requireOutputRecord(item, "Brave Search result item"));
-}
-
-function readRequiredString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
+  return value.map((item) => requiredResponseRecord(item, "Brave Search result item"));
 }
 
 function readOptionalStringArray(value: unknown): string[] | undefined {
@@ -331,8 +325,4 @@ function readOptionalStringArray(value: unknown): string[] | undefined {
   }
 
   return result.length > 0 ? result : undefined;
-}
-
-function requireOutputRecord(value: unknown, fieldName: string): Record<string, unknown> {
-  return requiredRecord(value, fieldName, (message) => new ProviderRequestError(502, message));
 }

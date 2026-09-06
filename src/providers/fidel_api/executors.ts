@@ -1,9 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { FidelApiActionName } from "./actions.ts";
 
 import { compactObject, optionalBoolean, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  isAbortLikeError,
+  providerUserAgent,
+  ProviderRequestError,
+} from "../provider-runtime.ts";
 
 const service = "fidel_api";
 const fidelApiBaseUrl = "https://api.fidel.uk/v1";
@@ -24,7 +29,7 @@ type FidelApiRequestPhase = "validate" | "execute";
 type FidelApiActionContext = ApiKeyProviderContext;
 type FidelApiActionHandler = (input: Record<string, unknown>, context: FidelApiActionContext) => Promise<unknown>;
 
-export const fidelApiActionHandlers: Record<FidelApiActionName, FidelApiActionHandler> = {
+export const fidelApiActionHandlers: ProviderActionHandlers<"fidel_api", FidelApiActionHandler> = {
   async list_brands(input, context): Promise<unknown> {
     return normalizeBrandListResponse(
       await requestFidelJson({
@@ -585,8 +590,4 @@ function createFidelRequestSignal(parent?: AbortSignal): FidelApiRequestSignal {
       parent?.removeEventListener("abort", abortFromParent);
     },
   };
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }

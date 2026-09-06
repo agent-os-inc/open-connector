@@ -129,8 +129,12 @@ npm run deploy:cloudflare
 ```
 
 `npm run deploy:cloudflare` generates the catalog, builds the Web Console, copies catalog assets,
-and runs `wrangler deploy --config wrangler.local.jsonc`. The copied `wrangler.local.jsonc` already
-maps the built Web Console assets to the `ASSETS` binding used by the Worker.
+and runs `wrangler deploy --config wrangler.local.jsonc --minify`. The copied
+`wrangler.local.jsonc` already maps the built Web Console assets to the `ASSETS` binding used by
+the Worker. `--minify` matters on Workers beyond the upload size limit: a heap snapshot of the
+running isolate (taken through the `wrangler dev` inspector) shows the script source retained as one
+string for as long as the isolate lives, so the 13.8 MiB minified script costs about half the
+isolate memory of the 28.7 MiB unminified one, out of the 128 MB each Worker isolate gets.
 
 Use the Worker URL printed by Wrangler to check the deployed runtime, then open the same URL in a
 browser and enter the admin token to access the Web Console:
@@ -175,7 +179,8 @@ Compression Rule matching `text/markdown` if your deployment serves agent guides
 ## Configuration
 
 Cloudflare uses the same environment variable names for origin, auth tokens, action policy, transit
-file limits, and credential encryption. `PORT`, `HOST`, and `OOMOL_CONNECT_DATA_DIR` are local
+file limits, and credential encryption. `PORT`, `HOST`, `OOMOL_CONNECT_DATA_DIR`,
+`OOMOL_CONNECT_CATALOG_LAZY_SCHEMAS`, and `OOMOL_CONNECT_CATALOG_SCHEMA_CACHE_FILES` are local
 Node-only settings on Workers.
 
 See [configuration.md](configuration.md) for all runtime environment variables.

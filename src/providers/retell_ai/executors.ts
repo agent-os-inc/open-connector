@@ -1,6 +1,6 @@
 import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { RetellAiActionName } from "./actions.ts";
 
 import {
   compactObject,
@@ -12,7 +12,12 @@ import {
   optionalString,
   requiredString,
 } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  ProviderRequestError,
+  providerUserAgent,
+  requiredInputString,
+} from "../provider-runtime.ts";
 
 const service = "retell_ai";
 const retellAiApiBaseUrl = "https://api.retellai.com";
@@ -20,7 +25,7 @@ const validationPath = "/list-voices";
 
 type RetellAiActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const retellAiActionHandlers: Record<RetellAiActionName, RetellAiActionHandler> = {
+export const retellAiActionHandlers: ProviderActionHandlers<"retell_ai", RetellAiActionHandler> = {
   async list_voices(_input, context) {
     const payload = await requestRetellAiJson({
       path: validationPath,
@@ -228,10 +233,6 @@ function appendQueryValue(url: URL, key: string, value: unknown): void {
   if (value !== undefined && value !== null && value !== "") {
     url.searchParams.set(key, String(value));
   }
-}
-
-function requiredInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function readArrayPayload(payload: unknown, label: string): Array<Record<string, unknown>> {

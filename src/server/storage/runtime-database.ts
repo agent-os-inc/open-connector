@@ -1,4 +1,5 @@
 import type { IConnectionStore } from "../../connection-service.ts";
+import type { IMarketplaceStore } from "../../marketplace/marketplace-service.ts";
 import type { IOAuthClientConfigStore } from "../../oauth/oauth-client-config-service.ts";
 import type { IOAuthStateStore } from "../../oauth/oauth-flow-service.ts";
 import type { IIdempotencyStore } from "./idempotency-store.ts";
@@ -14,4 +15,5 @@ export interface RuntimeDatabase {
   runtimePolicyStore: IRuntimePolicyStore;
   runLogStore: IRunLogStore;
   idempotencyStore: IIdempotencyStore;
+  marketplaceStore: IMarketplaceStore;
 }

@@ -1,15 +1,19 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { OAuthProviderContext } from "../provider-runtime.ts";
 
 import {
   compactObject,
+  optionalNumber,
   optionalRecord as asOptionalObject,
   optionalString as asOptionalString,
   pickOptionalInteger,
   pickOptionalString as pickNonEmptyString,
 } from "../../core/cast.ts";
-import { googleJsonRequest, googleRequest } from "../googledrive/runtime-shared.ts";
-import { defineOAuthProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
+import { googleJsonRequest, googleRequest } from "../google-runtime.ts";
+import { defineOAuthProviderExecutors, defineProviderProxy, ProviderRequestError } from "../provider-runtime.ts";
+
+const service = "google_search_console";
 
 export const searchConsoleApiBaseUrl = "https://www.googleapis.com/webmasters/v3";
 export const urlInspectionApiBaseUrl = "https://searchconsole.googleapis.com/v1";
@@ -36,7 +40,7 @@ type UrlInspectionPayload = {
   inspectionResult?: unknown;
 };
 
-export const googleSearchConsoleActionHandlers: Record<string, ActionHandler> = {
+export const googleSearchConsoleActionHandlers: ProviderActionHandlers<"google_search_console", ActionHandler> = {
   list_sites(input, deps) {
     return listSites(input, deps);
   },
@@ -69,10 +73,7 @@ export const googleSearchConsoleActionHandlers: Record<string, ActionHandler> = 
   },
 };
 
-export const executors: ProviderExecutors = defineOAuthProviderExecutors(
-  "google_search_console",
-  googleSearchConsoleActionHandlers,
-);
+export const executors: ProviderExecutors = defineOAuthProviderExecutors(service, googleSearchConsoleActionHandlers);
 
 export const credentialValidators: CredentialValidators = {
   async oauth2(input, { fetcher }) {
@@ -280,10 +281,10 @@ function normalizeSearchAnalyticsRow(value: unknown) {
 
   return {
     keys: Array.isArray(payload.keys) ? payload.keys.map(String) : [],
-    clicks: asOptionalNumber(payload.clicks) ?? 0,
-    impressions: asOptionalNumber(payload.impressions) ?? 0,
-    ctr: asOptionalNumber(payload.ctr) ?? 0,
-    position: asOptionalNumber(payload.position) ?? 0,
+    clicks: optionalNumber(payload.clicks) ?? 0,
+    impressions: optionalNumber(payload.impressions) ?? 0,
+    ctr: optionalNumber(payload.ctr) ?? 0,
+    position: optionalNumber(payload.position) ?? 0,
   };
 }
 
@@ -330,10 +331,6 @@ function stringifyOptional(value: unknown) {
     return String(value);
   }
   return null;
-}
-
-function asOptionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function resolveSiteUrl(input: Record<string, unknown>) {
@@ -401,3 +398,9 @@ async function urlInspectionJsonRequest<T>(
     body: input.body,
   });
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://www.googleapis.com/webmasters/v3",
+  auth: { type: "oauth_bearer" },
+});

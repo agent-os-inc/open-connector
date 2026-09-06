@@ -1,7 +1,7 @@
 import type { FeishuActionRuntimeContext, FeishuJsonRequest } from "./client.ts";
 import type { FeishuIdentity } from "./client.ts";
 
-import { optionalRecord, optionalString } from "../../../core/cast.ts";
+import { optionalBoolean, optionalRecord, optionalString } from "../../../core/cast.ts";
 import { ProviderRequestError } from "../../provider-runtime.ts";
 import { uploadFeishuMedia } from "./media.ts";
 
@@ -164,16 +164,30 @@ async function createChat(input: Record<string, unknown>, request: FeishuJsonReq
 
 async function updateChat(input: Record<string, unknown>, request: FeishuJsonRequest) {
   const chatId = requireString(input.chatId, "chatId");
+  const name = optionalString(input.name);
+  const description = optionalString(input.description);
+  if (
+    (input.name !== undefined && name === undefined) ||
+    (input.description !== undefined && description === undefined)
+  ) {
+    throw new ProviderRequestError(400, "name and description must be strings");
+  }
+  if (name === undefined && description === undefined) {
+    throw new ProviderRequestError(400, "provide at least one chat field to update");
+  }
+  if (name !== undefined && Array.from(name).length > 60) {
+    throw new ProviderRequestError(400, "name must not exceed 60 characters");
+  }
+  if (description !== undefined && Array.from(description).length > 100) {
+    throw new ProviderRequestError(400, "description must not exceed 100 characters");
+  }
   const data = await request({
     method: "PUT",
     path: `/im/v1/chats/${encodeURIComponent(chatId)}`,
     query: { user_id_type: optionalString(input.userIdType) ?? "open_id" },
     body: {
-      name: optionalString(input.name),
-      description: optionalString(input.description),
-      owner_id: optionalString(input.ownerId),
-      chat_type: optionalString(input.chatType),
-      external: optionalBoolean(input.external),
+      name,
+      description,
     },
   });
   return { raw: data };
@@ -277,10 +291,6 @@ function requireString(value: unknown, fieldName: string) {
 
 function stringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
-}
-
-function optionalBoolean(value: unknown) {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function optionalNumber(value: unknown) {

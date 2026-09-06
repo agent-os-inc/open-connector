@@ -1,12 +1,13 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { FolkActionName } from "./actions.ts";
 
 import {
   compactObject,
   objectArray,
   optionalBoolean,
   optionalInteger,
+  optionalRawString,
   optionalRecord,
   optionalString,
   stringArray,
@@ -31,7 +32,7 @@ interface FolkRequestInput {
   body?: Record<string, unknown>;
 }
 
-export const folkActionHandlers: Record<FolkActionName, FolkActionHandler> = {
+export const folkActionHandlers: ProviderActionHandlers<"folk", FolkActionHandler> = {
   async get_current_user(_input, context) {
     const payload = await requestFolkJson(context, {
       path: folkCurrentUserPath,
@@ -368,7 +369,7 @@ function buildFolkError(status: number, payload: unknown, phase: FolkPhase): Pro
     return new ProviderRequestError(400, message, payload);
   }
   if (phase === "execute" && (status === 401 || status === 403)) {
-    return new ProviderRequestError(409, message, payload);
+    return new ProviderRequestError(401, message, payload);
   }
   if (status === 400 || status === 404 || status === 422) {
     return new ProviderRequestError(400, message, payload);
@@ -730,10 +731,6 @@ function assertMutableFieldPresent(
   }
 
   throw new ProviderRequestError(400, message);
-}
-
-function optionalRawString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function isAbortError(error: unknown): boolean {

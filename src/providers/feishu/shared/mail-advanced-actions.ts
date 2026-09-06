@@ -331,7 +331,7 @@ export function createFeishuMailAdvancedActions(service: string): readonly Actio
             minItems: 1,
           }),
           subject: s.string("Subject text to match.", { minLength: 1 }),
-          unread: s.boolean("Whether messages must be unread."),
+          unread: s.literal(true, { description: "Filter unread messages when set to true." }),
           hasAttachment: s.boolean("Whether messages must have attachments."),
           startTime: s.dateTime("The earliest creation time."),
           endTime: s.dateTime("The latest creation time."),

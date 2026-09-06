@@ -1,9 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext, ProviderRuntimeHandler } from "../provider-runtime.ts";
-import type { WorldNewsApiActionName } from "./actions.ts";
 
 import { compactObject, optionalNumber, optionalString, requiredString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerInputError,
+  providerUserAgent,
+  ProviderRequestError,
+} from "../provider-runtime.ts";
 
 const service = "world_news_api";
 const worldNewsApiBaseUrl = "https://api.worldnewsapi.com";
@@ -11,7 +16,7 @@ const worldNewsApiBaseUrl = "https://api.worldnewsapi.com";
 type WorldNewsApiQueryValue = string | number | undefined;
 type WorldNewsApiActionHandler = ProviderRuntimeHandler<ApiKeyProviderContext>;
 
-export const worldNewsApiActionHandlers: Record<WorldNewsApiActionName, WorldNewsApiActionHandler> = {
+export const worldNewsApiActionHandlers: ProviderActionHandlers<"world_news_api", WorldNewsApiActionHandler> = {
   search_news(input, context) {
     validateSearchNewsInput(input);
     return requestWorldNewsApiJson(
@@ -246,8 +251,4 @@ function requireObject(value: unknown, label: string): Record<string, unknown> {
     throw new ProviderRequestError(502, `${label} must be an object`);
   }
   return value as Record<string, unknown>;
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

@@ -4,6 +4,7 @@ import type {
   ProviderProxyExecutor,
   ProxyExecutionResult,
 } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { createHash } from "node:crypto";
@@ -46,7 +47,7 @@ interface BarkResponsePayload {
 type BarkRequestPhase = "validate" | "execute";
 type BarkActionHandler = (input: Record<string, unknown>, context: BarkContext) => Promise<unknown>;
 
-export const barkActionHandlers: Record<string, BarkActionHandler> = {
+export const barkActionHandlers: ProviderActionHandlers<"bark", BarkActionHandler> = {
   send_notification(input, context) {
     return sendBarkNotification(input, context);
   },
@@ -314,7 +315,7 @@ function parseBarkPushUrl(value: string, allowPrivateNetwork: boolean): BarkCred
     return undefined;
   }
 
-  if (url.protocol !== "https:") {
+  if (url.protocol !== "https:" && !allowPrivateNetwork) {
     throw new ProviderRequestError(400, "Bark push URL must use https");
   }
 
@@ -342,7 +343,7 @@ function normalizeBarkBaseUrl(value?: string, allowPrivateNetwork: boolean = isP
     createError: (message) => new ProviderRequestError(400, message),
   });
 
-  if (url.protocol !== "https:") {
+  if (url.protocol !== "https:" && !allowPrivateNetwork) {
     throw new ProviderRequestError(400, "Bark baseUrl must use https");
   }
 

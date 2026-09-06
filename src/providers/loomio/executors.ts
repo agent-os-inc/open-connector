@@ -1,9 +1,14 @@
 import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { LoomioActionName } from "./actions.ts";
 
 import { optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerInputError,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "loomio";
 const loomioApiBaseUrl = "https://www.loomio.com/api/b2";
@@ -13,7 +18,7 @@ const loomioPollsPath = "/polls";
 type LoomioRequestPhase = "validate" | "execute";
 type LoomioActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const loomioActionHandlers: Record<LoomioActionName, LoomioActionHandler> = {
+export const loomioActionHandlers: ProviderActionHandlers<"loomio", LoomioActionHandler> = {
   list_polls(input, context) {
     return listLoomioPolls(input, context);
   },
@@ -78,7 +83,7 @@ async function listLoomioPolls(input: Record<string, unknown>, context: ApiKeyPr
 }
 
 async function getLoomioPoll(input: Record<string, unknown>, context: ApiKeyProviderContext): Promise<unknown> {
-  const pollIdOrKey = requiredString(input.pollIdOrKey, "pollIdOrKey", inputError);
+  const pollIdOrKey = requiredString(input.pollIdOrKey, "pollIdOrKey", providerInputError);
   const payload = await requestLoomioJson({
     path: `${loomioPollsPath}/${encodeURIComponent(pollIdOrKey)}`,
     apiKey: context.apiKey,
@@ -284,7 +289,7 @@ function requireObjectPayload(payload: unknown, label: string): Record<string, u
 function readRequiredPositiveInteger(value: unknown, fieldName: string): number {
   const parsed = optionalInteger(value);
   if (parsed == null || parsed <= 0) {
-    throw inputError(`${fieldName} must be a positive integer`);
+    throw providerInputError(`${fieldName} must be a positive integer`);
   }
 
   return parsed;
@@ -297,7 +302,7 @@ function readOptionalPositiveInteger(value: unknown, fieldName: string): number 
 
   const parsed = optionalInteger(value);
   if (parsed == null || parsed <= 0) {
-    throw inputError(`${fieldName} must be a positive integer`);
+    throw providerInputError(`${fieldName} must be a positive integer`);
   }
 
   return parsed;
@@ -310,7 +315,7 @@ function readOptionalNonNegativeInteger(value: unknown, fieldName: string): numb
 
   const parsed = optionalInteger(value);
   if (parsed == null || parsed < 0) {
-    throw inputError(`${fieldName} must be a non-negative integer`);
+    throw providerInputError(`${fieldName} must be a non-negative integer`);
   }
 
   return parsed;
@@ -369,8 +374,4 @@ function readNullableObjectField(record: Record<string, unknown>, ...keys: strin
   }
 
   return null;
-}
-
-function inputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

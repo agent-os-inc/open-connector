@@ -2,7 +2,7 @@ import type { ActionDefinition } from "../../core/types.ts";
 
 import { s } from "../../core/json-schema.ts";
 import { defineProviderAction } from "../../core/provider-definition.ts";
-import { blazeMeterResponseEnvelopeSchema, blazeMeterSortSchema } from "../blaze-meter-schemas.ts";
+import { blazeMeterResponseEnvelopeSchema, blazeMeterSortSchema } from "../blaze_meter_performance/shared-schemas.ts";
 
 const service = "blaze_meter_functional";
 
@@ -26,8 +26,6 @@ const getMultiTestInputSchema = s.object(
   },
   { optional: ["populateTests"] },
 );
-
-export type BlazeMeterFunctionalActionName = "list_multi_tests" | "get_multi_test" | "get_active_sessions";
 
 export const blazeMeterFunctionalActions: ActionDefinition[] = [
   defineProviderAction(service, {

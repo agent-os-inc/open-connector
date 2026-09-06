@@ -1,5 +1,5 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
-import type { DigitalOceanActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import {
   optionalIntegerLike,
@@ -14,13 +14,14 @@ import {
   createProviderTimeout,
   defineApiKeyProviderExecutors,
   isAbortLikeError,
+  providerInputError,
+  providerResponseError,
   providerUserAgent,
   ProviderRequestError,
 } from "../provider-runtime.ts";
 
 const service = "digital_ocean";
 const digitalOceanApiBaseUrl = "https://api.digitalocean.com/v2";
-const requestTimeoutMs = 30_000;
 
 interface DigitalOceanContext {
   apiKey: string;
@@ -30,7 +31,7 @@ interface DigitalOceanContext {
 
 type DigitalOceanActionHandler = (input: Record<string, unknown>, context: DigitalOceanContext) => Promise<unknown>;
 
-export const digitalOceanActionHandlers: Record<DigitalOceanActionName, DigitalOceanActionHandler> = {
+export const digitalOceanActionHandlers: ProviderActionHandlers<"digital_ocean", DigitalOceanActionHandler> = {
   get_account(_input, context) {
     return getAccount(context);
   },
@@ -249,7 +250,7 @@ async function digitalOceanFetch(input: {
       url.searchParams.set(key, String(value));
     }
   }
-  const timeout = createProviderTimeout(input.signal, requestTimeoutMs);
+  const timeout = createProviderTimeout(input.signal);
   try {
     const headers = jsonObject({
       accept: "application/json",
@@ -335,12 +336,4 @@ function requireResponseArray(value: unknown, fieldName: string): Array<Record<s
     throw new ProviderRequestError(502, `DigitalOcean response missing ${fieldName}`);
   }
   return value.map((item) => requiredRecord(item, fieldName, providerResponseError));
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
-}
-
-function providerResponseError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
 }

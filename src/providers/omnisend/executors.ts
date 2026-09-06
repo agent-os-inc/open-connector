@@ -1,15 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
+import { compactObject, optionalBoolean, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
-  compactObject,
-  optionalBoolean,
-  optionalNumber,
-  optionalRecord,
-  optionalString,
-  requiredString,
-} from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+  defineApiKeyProviderExecutors,
+  providerUserAgent,
+  ProviderRequestError,
+  requiredInputString,
+} from "../provider-runtime.ts";
 
 const service = "omnisend";
 const omnisendApiBaseUrl = "https://api.omnisend.com/api";
@@ -48,7 +47,7 @@ interface OmnisendRequestOptions {
   body?: unknown;
 }
 
-export const omnisendActionHandlers: Record<string, OmnisendActionHandler> = {
+export const omnisendActionHandlers: ProviderActionHandlers<"omnisend", OmnisendActionHandler> = {
   list_contacts(input, context) {
     return listContacts(input, context);
   },
@@ -142,7 +141,7 @@ async function listContacts(
 async function getContact(input: Record<string, unknown>, context: ApiKeyProviderContext): Promise<OmnisendJsonObject> {
   return requestOmnisendJson({
     apiKey: context.apiKey,
-    path: `/contacts/${encodeURIComponent(requireOmnisendString(input.contactID, "contactID"))}`,
+    path: `/contacts/${encodeURIComponent(requiredInputString(input.contactID, "contactID"))}`,
     fetcher: context.fetcher,
     signal: context.signal,
     mode: "execute",
@@ -171,7 +170,7 @@ async function updateContactById(
   requireAtLeastOneContactBodyField(input);
   return requestOmnisendJson({
     apiKey: context.apiKey,
-    path: `/contacts/${encodeURIComponent(requireOmnisendString(input.contactID, "contactID"))}`,
+    path: `/contacts/${encodeURIComponent(requiredInputString(input.contactID, "contactID"))}`,
     method: "PATCH",
     body: buildContactBody(input),
     fetcher: context.fetcher,
@@ -189,7 +188,7 @@ async function updateContactByEmail(
     apiKey: context.apiKey,
     path: "/contacts",
     query: {
-      email: requireOmnisendString(input.email, "email"),
+      email: requiredInputString(input.email, "email"),
     },
     method: "PATCH",
     body: buildContactBody(input),
@@ -257,7 +256,7 @@ async function listSegments(
 async function getSegment(input: Record<string, unknown>, context: ApiKeyProviderContext): Promise<OmnisendJsonObject> {
   return requestOmnisendJson({
     apiKey: context.apiKey,
-    path: `/segments/${encodeURIComponent(requireOmnisendString(input.segmentID, "segmentID"))}`,
+    path: `/segments/${encodeURIComponent(requiredInputString(input.segmentID, "segmentID"))}`,
     fetcher: context.fetcher,
     signal: context.signal,
     mode: "execute",
@@ -432,10 +431,6 @@ function extractOmnisendErrorMessage(payload: unknown): string | undefined {
   }
 
   return undefined;
-}
-
-function requireOmnisendString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function validateListContactsInput(input: Record<string, unknown>): void {

@@ -1,28 +1,29 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { objectArray, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
 import {
-  createProviderTimeout,
   defineApiKeyProviderExecutors,
-  isAbortLikeError,
+  providerInputError,
   ProviderRequestError,
+  providerResponseError,
   providerUserAgent,
+  runProviderRequest,
 } from "../provider-runtime.ts";
 
 const service = "store_leads";
 const storeLeadsApiBaseUrl = "https://storeleads.app/json/api/v1/all";
 const storeLeadsValidationPath = "/app";
-const storeLeadsDefaultRequestTimeoutMs = 30_000;
 
 type StoreLeadsPhase = "validate" | "execute";
 type StoreLeadsActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const storeLeadsActionHandlers: Record<string, StoreLeadsActionHandler> = {
+export const storeLeadsActionHandlers: ProviderActionHandlers<"store_leads", StoreLeadsActionHandler> = {
   async get_domain(input, context) {
     const body = await requestStoreLeadsObject({
       context,
-      path: `/domain/${encodeURIComponent(requiredString(input.domain, "domain", invalidInputError))}`,
+      path: `/domain/${encodeURIComponent(requiredString(input.domain, "domain", providerInputError))}`,
       query: buildQueryParams(input, ["follow_redirects", "fields"]),
       phase: "execute",
     });
@@ -36,14 +37,14 @@ export const storeLeadsActionHandlers: Record<string, StoreLeadsActionHandler> =
       phase: "execute",
     });
     return {
-      domains: objectArray(body.domains, "Store Leads domains list response", providerError),
+      domains: objectArray(body.domains, "Store Leads domains list response", providerResponseError),
       next_cursor: optionalString(body.next_cursor) ?? null,
     };
   },
   async get_app(input, context) {
     const body = await requestStoreLeadsObject({
       context,
-      path: `/app/${encodeURIComponent(requiredString(input.app_id, "app_id", invalidInputError))}`,
+      path: `/app/${encodeURIComponent(requiredString(input.app_id, "app_id", providerInputError))}`,
       query: buildQueryParams(input, ["fields"]),
       phase: "execute",
     });
@@ -64,12 +65,12 @@ export const storeLeadsActionHandlers: Record<string, StoreLeadsActionHandler> =
       ]),
       phase: "execute",
     });
-    return { apps: objectArray(body.apps, "Store Leads apps list response", providerError) };
+    return { apps: objectArray(body.apps, "Store Leads apps list response", providerResponseError) };
   },
   async get_technology(input, context) {
     const body = await requestStoreLeadsObject({
       context,
-      path: `/technology/${encodeURIComponent(requiredString(input.technology, "technology", invalidInputError))}`,
+      path: `/technology/${encodeURIComponent(requiredString(input.technology, "technology", providerInputError))}`,
       query: buildQueryParams(input, ["fields"]),
       phase: "execute",
     });
@@ -85,7 +86,7 @@ export const storeLeadsActionHandlers: Record<string, StoreLeadsActionHandler> =
       phase: "execute",
     });
     return {
-      technologies: objectArray(body.technologies, "Store Leads technologies list response", providerError),
+      technologies: objectArray(body.technologies, "Store Leads technologies list response", providerResponseError),
     };
   },
 };
@@ -100,7 +101,7 @@ export const credentialValidators: CredentialValidators = {
       query: buildQueryParams({ page_size: 1 }, ["page_size"]),
       phase: "validate",
     });
-    const apps = objectArray(body.apps, "Store Leads apps list response", providerError);
+    const apps = objectArray(body.apps, "Store Leads apps list response", providerResponseError);
     const firstApp = apps[0];
     return {
       profile: {
@@ -135,8 +136,7 @@ async function requestStoreLeadsJson(input: {
   phase: StoreLeadsPhase;
   query?: URLSearchParams;
 }): Promise<unknown> {
-  const timeout = createProviderTimeout(input.context.signal, storeLeadsDefaultRequestTimeoutMs);
-  try {
+  return runProviderRequest({ signal: input.context.signal, label: "Store Leads" }, async (signal) => {
     const response = await input.context.fetcher(buildStoreLeadsUrl(input.path, input.query), {
       method: "GET",
       headers: {
@@ -144,27 +144,14 @@ async function requestStoreLeadsJson(input: {
         authorization: `Bearer ${input.context.apiKey}`,
         "user-agent": providerUserAgent,
       },
-      signal: timeout.signal,
+      signal,
     });
     const payload = await readStoreLeadsPayload(response);
     if (!response.ok) {
       throw createStoreLeadsError(response.status, payload, input.phase);
     }
     return payload;
-  } catch (error) {
-    if (error instanceof ProviderRequestError) {
-      throw error;
-    }
-    if (timeout.didTimeout() || isAbortLikeError(error)) {
-      throw new ProviderRequestError(504, "Store Leads request timed out");
-    }
-    throw new ProviderRequestError(
-      502,
-      error instanceof Error ? `Store Leads request failed: ${error.message}` : "Store Leads request failed",
-    );
-  } finally {
-    timeout.cleanup();
-  }
+  });
 }
 
 function buildStoreLeadsUrl(path: string, query?: URLSearchParams): string {
@@ -230,12 +217,4 @@ function requireProviderObject(value: unknown, label: string): Record<string, un
     throw new ProviderRequestError(502, `${label} is missing an object`, value);
   }
   return object;
-}
-
-function invalidInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
-}
-
-function providerError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
 }

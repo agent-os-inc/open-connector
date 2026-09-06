@@ -180,14 +180,6 @@ const customerOutputSchema = s.object("Square customer response.", {
   customer: squareCustomerSchema,
 });
 
-export type SquareActionName =
-  | "list_locations"
-  | "list_customers"
-  | "get_customer"
-  | "create_customer"
-  | "update_customer"
-  | "search_customers";
-
 export const squareActions: ActionDefinition[] = [
   defineProviderAction(service, {
     name: "list_locations",
@@ -232,7 +224,3 @@ export const squareActions: ActionDefinition[] = [
     outputSchema: customerPageOutputSchema,
   }),
 ];
-
-export const squareActionByName: ReadonlyMap<string, ActionDefinition> = new Map(
-  squareActions.map((action) => [action.name, action]),
-);

@@ -1,8 +1,17 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
-import { compactObject, optionalBoolean, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
+import {
+  compactObject,
+  optionalBoolean,
+  optionalBooleanOrNull,
+  optionalInteger,
+  optionalRecord,
+  optionalString,
+} from "../../core/cast.ts";
 import {
   defineProviderExecutors,
+  isAbortLikeError,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
@@ -28,7 +37,7 @@ type AddressfinderActionHandler = (
   context: AddressfinderActionContext,
 ) => Promise<unknown>;
 
-export const addressfinderActionHandlers: Record<string, AddressfinderActionHandler> = {
+export const addressfinderActionHandlers: ProviderActionHandlers<"addressfinder", AddressfinderActionHandler> = {
   find_au_addresses(input, context) {
     return executeAutocomplete("au", "/au/address/autocomplete", input, context);
   },
@@ -190,7 +199,7 @@ function executeVerification(
       const record = requireRecord(payload, "Addressfinder verification response");
       return {
         success: readBoolean(record.success, true),
-        matched: readNullableBoolean(record.matched),
+        matched: optionalBooleanOrNull(record.matched),
         address: readNullableRecord(record.address),
         meta: { country, endpoint: path },
         raw: record,
@@ -376,10 +385,6 @@ function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
-function readNullableBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
-
 function readNullableRecord(value: unknown): Record<string, unknown> | null {
   return optionalRecord(value) ?? null;
 }
@@ -390,11 +395,4 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new ProviderRequestError(502, `${label} is not a JSON object`);
   }
   return record;
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return (
-    error instanceof DOMException ||
-    (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"))
-  );
 }

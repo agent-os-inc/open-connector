@@ -4,11 +4,40 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import {
   parseRuntimeActionHttpResult,
+  providerErrorCodes,
   serializeRuntimeAction,
   serializeRuntimeActionResult,
   serializeRuntimeFailure,
+  unknownActionFailure,
   writeRuntimeActionHttpResult,
 } from "./runtime-api.ts";
+
+function actionStatusFor(code: string): number {
+  return serializeRuntimeActionResult({
+    actionId: "example.echo",
+    executionId: "execution-1",
+    auditPersisted: false,
+    result: { ok: false, error: { code, message: "Action failed." } },
+  }).status;
+}
+
+describe("provider error codes", () => {
+  it("names the codes the action route maps and a provider may set", () => {
+    expect(providerErrorCodes).toEqual([
+      "authorization_failed",
+      "insufficient_credit",
+      "invalid_input",
+      "provider_error",
+      "rate_limited",
+    ]);
+    expect(providerErrorCodes.map(actionStatusFor)).toEqual([403, 402, 400, 500, 429]);
+  });
+
+  it("leaves the connection and dispatch codes out of a provider's reach", () => {
+    expect(providerErrorCodes).not.toContain("oauth_token_expired");
+    expect(actionStatusFor("oauth_token_expired")).toBe(409);
+  });
+});
 
 describe("runtime action metadata", () => {
   it("includes the execution status advertised by the runtime catalog", () => {
@@ -68,8 +97,11 @@ describe("runtime action HTTP results", () => {
 
   it.each([
     ["authorization_failed", 403],
+    ["connection_not_allowed", 403],
     ["connection_not_found", 404],
+    ["unknown_action", 404],
     ["rate_limited", 429],
+    ["insufficient_credit", 402],
     ["provider_error", 500],
     ["internal_error", 500],
     ["oauth_token_expired", 409],
@@ -104,6 +136,34 @@ describe("runtime action HTTP results", () => {
         },
       },
     });
+  });
+
+  it("preserves an upstream task-not-found status for invalid_input", () => {
+    expect(
+      serializeRuntimeActionResult({
+        actionId: "example.get_task",
+        executionId: "execution-1",
+        auditPersisted: false,
+        result: {
+          ok: false,
+          error: { code: "invalid_input", message: "Task not found.", details: { status: 404 } },
+        },
+      }).status,
+    ).toBe(404);
+  });
+
+  it("preserves an upstream payload-too-large status the way the proxy route does", () => {
+    expect(
+      serializeRuntimeActionResult({
+        actionId: "example.download",
+        executionId: "execution-1",
+        auditPersisted: false,
+        result: {
+          ok: false,
+          error: { code: "invalid_input", message: "response exceeds 4 bytes", details: { status: 413 } },
+        },
+      }).status,
+    ).toBe(413);
   });
 
   it("serializes runtime failures for persistence", () => {
@@ -145,6 +205,19 @@ describe("runtime action HTTP results", () => {
     });
 
     expect(parseRuntimeActionHttpResult(result)).toEqual(result);
+  });
+
+  it("serializes a catalog miss as unknown_action", () => {
+    expect(serializeRuntimeFailure(unknownActionFailure("example.missing"))).toEqual({
+      status: 404,
+      body: {
+        success: false,
+        message: "Unknown action: example.missing",
+        data: null,
+        errorCode: "unknown_action",
+        meta: { actionId: "example.missing" },
+      },
+    });
   });
 
   it("writes a previously serialized result", async () => {

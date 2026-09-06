@@ -7,61 +7,33 @@ export class ApiError extends Error {
   }
 }
 
-export interface RequestOptions {
-  bearerToken?: string;
+export async function apiGet<T>(path: string, bearerToken?: string): Promise<T> {
+  const token = bearerToken?.trim();
+  return request<T>(path, { headers: token ? { authorization: `Bearer ${token}` } : undefined });
 }
 
-export async function apiGet<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  return readJson<T>(
-    await fetch(path, {
-      headers: headersFor(options),
-      credentials: "same-origin",
-    }),
-  );
+export function apiPost<T = unknown>(path: string, body: unknown): Promise<T> {
+  return send<T>("POST", path, body);
 }
 
-export async function apiPost<T = unknown>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
-  return readJson<T>(
-    await fetch(path, {
-      method: "POST",
-      headers: headersFor(options, true),
-      credentials: "same-origin",
-      body: JSON.stringify(body),
-    }),
-  );
+export function apiPut<T = unknown>(path: string, body: unknown): Promise<T> {
+  return send<T>("PUT", path, body);
 }
 
-export async function apiPut<T = unknown>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
-  return readJson<T>(
-    await fetch(path, {
-      method: "PUT",
-      headers: headersFor(options, true),
-      credentials: "same-origin",
-      body: JSON.stringify(body),
-    }),
-  );
+export function apiPatch<T = unknown>(path: string, body: unknown): Promise<T> {
+  return send<T>("PATCH", path, body);
 }
 
-export async function apiDelete<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
-  return readJson<T>(
-    await fetch(path, {
-      method: "DELETE",
-      headers: headersFor(options),
-      credentials: "same-origin",
-    }),
-  );
+export function apiDelete<T = unknown>(path: string): Promise<T> {
+  return request<T>(path, { method: "DELETE" });
 }
 
-function headersFor(options: RequestOptions, json = false): Headers {
-  const headers = new Headers();
-  if (json) {
-    headers.set("content-type", "application/json");
-  }
-  const token = options.bearerToken?.trim();
-  if (token) {
-    headers.set("authorization", `Bearer ${token}`);
-  }
-  return headers;
+function send<T>(method: string, path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+
+async function request<T>(path: string, init: RequestInit): Promise<T> {
+  return readJson<T>(await fetch(path, { credentials: "same-origin", ...init }));
 }
 
 async function readJson<T>(response: Response): Promise<T> {

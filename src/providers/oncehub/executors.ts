@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { OncehubActionName } from "./actions.ts";
 
 import { createHash } from "node:crypto";
 import { optionalRecord, optionalString } from "../../core/cast.ts";
@@ -15,7 +15,6 @@ import {
 const service = "oncehub";
 const oncehubApiBaseUrl = "https://api.oncehub.com";
 const oncehubValidationPath = "/test";
-const oncehubRequestTimeoutMs = 30_000;
 
 type OncehubRequestPhase = "validate" | "execute";
 type OncehubActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
@@ -36,7 +35,7 @@ interface OncehubCursors {
   previousCursor: string | null;
 }
 
-export const oncehubActionHandlers: Record<OncehubActionName, OncehubActionHandler> = {
+export const oncehubActionHandlers: ProviderActionHandlers<"oncehub", OncehubActionHandler> = {
   list_bookings(input, context) {
     return requestOncehubList({
       context,
@@ -132,7 +131,7 @@ async function requestOncehubJson(input: OncehubRequestInput): Promise<unknown> 
 }
 
 async function requestOncehubResponse(input: OncehubRequestInput): Promise<Response> {
-  const timeout = createProviderTimeout(input.context.signal, oncehubRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
   try {
     return await input.context.fetcher(buildOncehubUrl(input.path, input.query), {
       method: "GET",

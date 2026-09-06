@@ -1,9 +1,19 @@
-import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type {
+  CredentialValidationResult,
+  CredentialValidators,
+  ProviderExecutors,
+  ProviderProxyExecutor,
+} from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { CircleciActionName } from "./actions.ts";
 
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "circleci";
 const circleciApiBaseUrl = "https://circleci.com/api/v2";
@@ -11,7 +21,7 @@ const circleciApiBaseUrl = "https://circleci.com/api/v2";
 type CircleciActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 type CircleciRequestPhase = "validate" | "execute";
 
-export const circleciActionHandlers: Record<CircleciActionName, CircleciActionHandler> = {
+export const circleciActionHandlers: ProviderActionHandlers<"circleci", CircleciActionHandler> = {
   get_current_user(_input, context) {
     return requestCircleciJson({ apiKey: context.apiKey, path: "/me", context, phase: "execute" });
   },
@@ -341,3 +351,9 @@ function requiredResponseString(value: unknown, fieldName: string): string {
   }
   return text;
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://circleci.com/api/v2",
+  auth: { type: "api_key_header", name: "circle-token" },
+});

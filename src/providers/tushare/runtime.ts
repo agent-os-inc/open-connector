@@ -1,13 +1,15 @@
 import type { CredentialValidationResult } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { TushareActionName } from "./actions.ts";
 
-import { optionalNumber, optionalRecord, optionalString, requiredRecord, requiredString } from "../../core/cast.ts";
+import { optionalNumber, optionalString, requiredRecord } from "../../core/cast.ts";
 import {
   createProviderTimeout,
   isAbortLikeError,
   ProviderRequestError,
   providerUserAgent,
+  requiredInputString,
+  requiredResponseRecord,
 } from "../provider-runtime.ts";
 
 interface TushareTableData {
@@ -34,7 +36,6 @@ interface TushareRequestInput {
 type TushareActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
 export const tushareApiBaseUrl: string = "https://api.tushare.pro";
-const tushareRequestTimeoutMs = 30_000;
 
 const stockBasicFields = [
   "ts_code",
@@ -84,6 +85,21 @@ const dailyBasicFields = [
   "circ_mv",
 ] as const;
 const adjustmentFactorFields = ["ts_code", "trade_date", "adj_factor"] as const;
+const shareholderTradeFields = [
+  "ts_code",
+  "ann_date",
+  "holder_name",
+  "holder_type",
+  "in_de",
+  "change_vol",
+  "change_ratio",
+  "after_share",
+  "after_ratio",
+  "avg_price",
+  "total_share",
+  "begin_date",
+  "close_date",
+] as const;
 
 const stockBasicFieldMap = {
   ts_code: "tsCode",
@@ -142,14 +158,49 @@ const adjustmentFactorFieldMap = {
   trade_date: "tradeDate",
   adj_factor: "adjFactor",
 };
+const shareholderTradeFieldMap = {
+  ts_code: "tsCode",
+  ann_date: "announcementDate",
+  holder_name: "holderName",
+  holder_type: "holderType",
+  in_de: "tradeType",
+  change_vol: "changeVolume",
+  change_ratio: "changeRatio",
+  after_share: "sharesAfterChange",
+  after_ratio: "ratioAfterChange",
+  avg_price: "averagePrice",
+  total_share: "totalShares",
+  begin_date: "beginDate",
+  close_date: "closeDate",
+};
 const datedMarketDataParams = {
   ts_code: "tsCode",
   trade_date: "tradeDate",
   start_date: "startDate",
   end_date: "endDate",
 };
+const shareholderTradeParams = {
+  ts_code: "tsCode",
+  ann_date: "announcementDate",
+  start_date: "startDate",
+  end_date: "endDate",
+  trade_type: "tradeType",
+  holder_type: "holderType",
+};
 
-export const tushareActionHandlers: Record<TushareActionName, TushareActionHandler> = {
+function validateShareholderTradeFilters(input: Record<string, unknown>): void {
+  const hasStartDate = input.startDate !== undefined;
+  const hasEndDate = input.endDate !== undefined;
+  const isBounded = input.tsCode !== undefined || input.announcementDate !== undefined || (hasStartDate && hasEndDate);
+  if (!isBounded || hasStartDate !== hasEndDate) {
+    throw new ProviderRequestError(
+      400,
+      "get_shareholder_trades requires tsCode, announcementDate, or both startDate and endDate",
+    );
+  }
+}
+
+export const tushareActionHandlers: ProviderActionHandlers<"tushare", TushareActionHandler> = {
   query_data(input, context) {
     return executeQueryData(input, context);
   },
@@ -211,6 +262,18 @@ export const tushareActionHandlers: Record<TushareActionName, TushareActionHandl
       fieldMap: adjustmentFactorFieldMap,
     });
   },
+  get_shareholder_trades(input, context) {
+    validateShareholderTradeFilters(input);
+    return executeMappedTableAction({
+      apiName: "stk_holdertrade",
+      input,
+      context,
+      fields: shareholderTradeFields,
+      params: shareholderTradeParams,
+      outputKey: "shareholderTrades",
+      fieldMap: shareholderTradeFieldMap,
+    });
+  },
 };
 
 export async function validateTushareCredential(
@@ -244,7 +307,7 @@ export async function validateTushareCredential(
 async function executeQueryData(input: Record<string, unknown>, context: ApiKeyProviderContext): Promise<unknown> {
   const payload = await tushareRequest(
     {
-      apiName: readRequiredTrimmedString(input.apiName, "apiName"),
+      apiName: requiredInputString(input.apiName, "apiName"),
       params: readOptionalObject(input.params, "params"),
       fields: normalizeFieldsInput(input.fields),
     },
@@ -281,7 +344,7 @@ async function tushareRequest(
   input: TushareRequestInput,
   context: Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">,
 ): Promise<Record<string, unknown>> {
-  const timeout = createProviderTimeout(context.signal, tushareRequestTimeoutMs);
+  const timeout = createProviderTimeout(context.signal);
   try {
     const response = await context.fetcher(tushareApiBaseUrl, {
       method: "POST",
@@ -299,7 +362,7 @@ async function tushareRequest(
       }),
     });
     const payload = await readJsonPayload(response);
-    const envelope = readProviderObject(payload, "payload");
+    const envelope = requiredResponseRecord(payload, "payload");
     if (!response.ok) {
       throw createTushareHttpError(response.status, envelope);
     }
@@ -350,7 +413,7 @@ function createTushareApiError(code: number, payload: Record<string, unknown>): 
 }
 
 function normalizeTableData(value: unknown): TushareTableData {
-  const data = readProviderObject(value, "data");
+  const data = requiredResponseRecord(value, "data");
   return {
     fields: normalizeFields(data.fields),
     items: normalizeItems(data.items),
@@ -420,7 +483,7 @@ function normalizeFieldsInput(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "string") return value.trim() || undefined;
   if (Array.isArray(value)) {
-    const fields = value.map((item, index) => readRequiredTrimmedString(item, `fields[${index}]`));
+    const fields = value.map((item, index) => requiredInputString(item, `fields[${index}]`));
     return fields.length > 0 ? fields.join(",") : undefined;
   }
   throw new ProviderRequestError(400, "fields must be a string or an array of strings");
@@ -429,16 +492,6 @@ function normalizeFieldsInput(value: unknown): string | undefined {
 function readOptionalObject(value: unknown, fieldName: string): Record<string, unknown> | undefined {
   if (value === undefined) return undefined;
   return requiredRecord(value, fieldName, (message) => new ProviderRequestError(400, message));
-}
-
-function readProviderObject(value: unknown, fieldName: string): Record<string, unknown> {
-  const record = optionalRecord(value);
-  if (!record) throw new ProviderRequestError(502, `${fieldName} must be an object`);
-  return record;
-}
-
-function readRequiredTrimmedString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function readProviderString(value: unknown, fieldName: string): string {

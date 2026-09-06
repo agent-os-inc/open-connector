@@ -1,6 +1,6 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ProviderRuntimeHandler } from "../provider-runtime.ts";
-import type { BrazeActionName } from "./actions.ts";
 
 import {
   compactObject,
@@ -8,7 +8,6 @@ import {
   optionalInteger,
   optionalRecord,
   optionalString,
-  requiredRecord,
   requiredString,
 } from "../../core/cast.ts";
 import { assertPublicHttpUrl } from "../../core/request.ts";
@@ -19,10 +18,11 @@ import {
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
+  requiredInputString,
+  requiredResponseRecord,
 } from "../provider-runtime.ts";
 
 const service = "braze";
-const brazeRequestTimeoutMs = 30_000;
 const brazeCredentialHelpUrl = "https://www.braze.com/docs/api/basics";
 
 type BrazeRequestPhase = "validate" | "execute";
@@ -58,7 +58,7 @@ const brazeValidationCandidates: BrazeValidationCandidate[] = [
 
 type BrazeActionHandler = ProviderRuntimeHandler<BrazeActionContext>;
 
-export const brazeActionHandlers: Record<BrazeActionName, BrazeActionHandler> = {
+export const brazeActionHandlers: ProviderActionHandlers<"braze", BrazeActionHandler> = {
   async list_campaigns(input, context) {
     const payload = await requestBrazeJson({
       context,
@@ -69,7 +69,7 @@ export const brazeActionHandlers: Record<BrazeActionName, BrazeActionHandler> = 
     return normalizeCampaignList(payload);
   },
   async get_campaign_details(input, context) {
-    const campaignId = requireInputString(input.campaignId, "campaignId");
+    const campaignId = requiredInputString(input.campaignId, "campaignId");
     const payload = await requestBrazeJson({
       context,
       path: "/campaigns/details",
@@ -92,7 +92,7 @@ export const brazeActionHandlers: Record<BrazeActionName, BrazeActionHandler> = 
     return normalizeCanvasList(payload);
   },
   async get_canvas_details(input, context) {
-    const canvasId = requireInputString(input.canvasId, "canvasId");
+    const canvasId = requiredInputString(input.canvasId, "canvasId");
     const payload = await requestBrazeJson({
       context,
       path: "/canvas/details",
@@ -202,7 +202,7 @@ async function requestBrazeJson(input: {
   query?: Array<[string, unknown]>;
   phase: BrazeRequestPhase;
 }): Promise<unknown> {
-  const timeout = createProviderTimeout(input.context.signal, brazeRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
   let response: Response;
   let payload: unknown;
 
@@ -313,7 +313,7 @@ function createBrazeError(status: number, payload: unknown, phase: BrazeRequestP
 }
 
 function normalizeCampaignList(payload: unknown): Record<string, unknown> {
-  const record = requireOutputRecord(payload, "Braze campaign list response");
+  const record = requiredResponseRecord(payload, "Braze campaign list response");
   return compactObject({
     message: optionalString(record.message),
     campaigns: requireObjectArray(record.campaigns, "campaigns").map(normalizeCampaignListItem),
@@ -322,7 +322,7 @@ function normalizeCampaignList(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeCampaignListItem(value: unknown): Record<string, unknown> {
-  const record = requireOutputRecord(value, "campaign item");
+  const record = requiredResponseRecord(value, "campaign item");
   return compactObject({
     id: requireOutputString(record.id, "campaign.id"),
     name: optionalString(record.name),
@@ -334,7 +334,7 @@ function normalizeCampaignListItem(value: unknown): Record<string, unknown> {
 }
 
 function normalizeCanvasList(payload: unknown): Record<string, unknown> {
-  const record = requireOutputRecord(payload, "Braze Canvas list response");
+  const record = requiredResponseRecord(payload, "Braze Canvas list response");
   return compactObject({
     message: optionalString(record.message),
     canvases: requireObjectArray(record.canvases, "canvases").map(normalizeCanvasListItem),
@@ -343,7 +343,7 @@ function normalizeCanvasList(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeCanvasListItem(value: unknown): Record<string, unknown> {
-  const record = requireOutputRecord(value, "Canvas item");
+  const record = requiredResponseRecord(value, "Canvas item");
   return compactObject({
     id: requireOutputString(record.id, "canvas.id"),
     name: optionalString(record.name),
@@ -354,7 +354,7 @@ function normalizeCanvasListItem(value: unknown): Record<string, unknown> {
 }
 
 function normalizeCampaignDetails(payload: unknown, campaignId: string): Record<string, unknown> {
-  const record = requireOutputRecord(payload, "Braze campaign details response");
+  const record = requiredResponseRecord(payload, "Braze campaign details response");
   const campaign = compactObject({
     id: campaignId,
     name: optionalString(record.name),
@@ -383,7 +383,7 @@ function normalizeCampaignDetails(payload: unknown, campaignId: string): Record<
 }
 
 function normalizeCanvasDetails(payload: unknown, canvasId: string): Record<string, unknown> {
-  const record = requireOutputRecord(payload, "Braze Canvas details response");
+  const record = requiredResponseRecord(payload, "Braze Canvas details response");
   const canvas = compactObject({
     id: canvasId,
     name: optionalString(record.name),
@@ -446,7 +446,7 @@ function normalizeBrazeRestEndpoint(value: unknown): string {
 }
 
 function readValidationItemCount(payload: unknown, resultArrayKey: "campaigns" | "canvases"): number | undefined {
-  const record = requireOutputRecord(payload, "Braze validation response");
+  const record = requiredResponseRecord(payload, "Braze validation response");
   const entries = record[resultArrayKey];
   return Array.isArray(entries) ? entries.length : undefined;
 }
@@ -455,14 +455,14 @@ function requireObjectArray(value: unknown, fieldName: string): Array<Record<str
   if (!Array.isArray(value)) {
     throw new ProviderRequestError(502, `${fieldName} must be an array`);
   }
-  return value.map((entry, index) => requireOutputRecord(entry, `${fieldName}[${index}]`));
+  return value.map((entry, index) => requiredResponseRecord(entry, `${fieldName}[${index}]`));
 }
 
 function readOptionalObject(value: unknown, fieldName: string): Record<string, unknown> | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  return requireOutputRecord(value, fieldName);
+  return requiredResponseRecord(value, fieldName);
 }
 
 function readOptionalObjectArray(value: unknown, fieldName: string): Array<Record<string, unknown>> | undefined {
@@ -514,14 +514,6 @@ function readOptionalErrorArrayMessage(value: unknown): string | undefined {
   return messages.length > 0 ? messages.join("; ") : undefined;
 }
 
-function requireInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
-}
-
 function requireOutputString(value: unknown, fieldName: string): string {
   return requiredString(value, fieldName, (message) => new ProviderRequestError(502, message));
-}
-
-function requireOutputRecord(value: unknown, fieldName: string): Record<string, unknown> {
-  return requiredRecord(value, fieldName, (message) => new ProviderRequestError(502, message));
 }

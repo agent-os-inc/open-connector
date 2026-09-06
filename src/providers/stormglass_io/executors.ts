@@ -1,8 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { compactObject, objectArray, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  ProviderRequestError,
+  providerResponseError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "stormglass_io";
 const stormglassApiBaseUrl = "https://api.stormglass.io";
@@ -10,7 +16,7 @@ const stormglassApiBaseUrl = "https://api.stormglass.io";
 type StormglassPhase = "validate" | "execute";
 type StormglassActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const stormglassIoActionHandlers: Record<string, StormglassActionHandler> = {
+export const stormglassIoActionHandlers: ProviderActionHandlers<"stormglass_io", StormglassActionHandler> = {
   get_weather_point(input, context) {
     return executeWeatherPoint(input, context, "execute");
   },
@@ -67,7 +73,7 @@ async function executeWeatherPoint(
 ): Promise<Record<string, unknown>> {
   const payload = await stormglassJsonRequest("/v2/weather/point", buildWeatherPointQuery(input), context, phase);
   return {
-    hours: objectArray(payload.hours, "hours", providerError),
+    hours: objectArray(payload.hours, "hours", providerResponseError),
     meta: optionalRecord(payload.meta) ?? {},
   };
 }
@@ -83,7 +89,7 @@ async function executeTideExtremes(
     "execute",
   );
   return {
-    extremes: objectArray(payload.data, "data", providerError),
+    extremes: objectArray(payload.data, "data", providerResponseError),
     meta: optionalRecord(payload.meta) ?? {},
   };
 }
@@ -99,7 +105,7 @@ async function executeTideSeaLevel(
     "execute",
   );
   return {
-    seaLevels: objectArray(payload.data, "data", providerError),
+    seaLevels: objectArray(payload.data, "data", providerResponseError),
     meta: optionalRecord(payload.meta) ?? {},
   };
 }
@@ -254,8 +260,4 @@ function readOptionalTimeValue(value: unknown): string | number | undefined {
     throw new ProviderRequestError(400, "time value must be a non-empty string or integer");
   }
   return stringValue;
-}
-
-function providerError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
 }

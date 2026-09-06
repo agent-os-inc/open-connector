@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { CollegeFootballDataActionName } from "./actions.ts";
 
 import { compactObject, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
 import { queryParams } from "../../core/request.ts";
@@ -14,7 +14,6 @@ import {
 
 const service = "college_football_data";
 const collegeFootballDataApiBaseUrl = "https://api.collegefootballdata.com";
-const collegeFootballDataDefaultRequestTimeoutMs = 30_000;
 
 type CollegeFootballDataPhase = "validate" | "execute";
 type CollegeFootballDataContext = Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">;
@@ -23,8 +22,8 @@ type CollegeFootballDataActionHandler = (
   context: CollegeFootballDataContext,
 ) => Promise<unknown>;
 
-export const collegeFootballDataActionHandlers: Record<
-  CollegeFootballDataActionName,
+export const collegeFootballDataActionHandlers: ProviderActionHandlers<
+  "college_football_data",
   CollegeFootballDataActionHandler
 > = {
   async get_info(_input, context) {
@@ -118,7 +117,7 @@ async function requestCollegeFootballDataJson(
   context: CollegeFootballDataContext,
   phase: CollegeFootballDataPhase,
 ): Promise<unknown> {
-  const timeout = createProviderTimeout(context.signal, collegeFootballDataDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(context.signal);
 
   try {
     const response = await context.fetcher(buildCollegeFootballDataUrl(path, query), {

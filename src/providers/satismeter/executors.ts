@@ -1,6 +1,6 @@
 import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { SatismeterActionName } from "./actions.ts";
 
 import { optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
 import {
@@ -9,18 +9,18 @@ import {
   isAbortLikeError,
   ProviderRequestError,
   providerUserAgent,
+  requiredInputString,
 } from "../provider-runtime.ts";
 
 const service = "satismeter";
 const satismeterApiBaseUrl = "https://app.satismeter.com/api/v3";
-const satismeterDefaultRequestTimeoutMs = 30_000;
 const satismeterValidationProbeProjectId = "000000000000000000000000";
 const satismeterValidationPath = `/projects/${satismeterValidationProbeProjectId}`;
 
 type SatismeterMode = "validate" | "execute";
 type SatismeterActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const satismeterActionHandlers: Record<SatismeterActionName, SatismeterActionHandler> = {
+export const satismeterActionHandlers: ProviderActionHandlers<"satismeter", SatismeterActionHandler> = {
   get_project(input, context) {
     return getProject(input, context);
   },
@@ -80,7 +80,7 @@ async function getProject(
     apiKey: context.apiKey,
     fetcher: context.fetcher,
     signal: context.signal,
-    path: `/projects/${encodeURIComponent(requireInputString(input.projectId, "projectId"))}`,
+    path: `/projects/${encodeURIComponent(requiredInputString(input.projectId, "projectId"))}`,
     mode: "execute",
   });
   return { project: requireResponseObject(body.data, "data") };
@@ -94,7 +94,7 @@ async function listSurveys(
     apiKey: context.apiKey,
     fetcher: context.fetcher,
     signal: context.signal,
-    path: `/projects/${encodeURIComponent(requireInputString(input.projectId, "projectId"))}/campaigns`,
+    path: `/projects/${encodeURIComponent(requiredInputString(input.projectId, "projectId"))}/campaigns`,
     mode: "execute",
   });
   return { surveys: requireResponseArray(body.data, "data") };
@@ -104,8 +104,8 @@ async function getSurvey(
   input: Record<string, unknown>,
   context: ApiKeyProviderContext,
 ): Promise<Record<string, unknown>> {
-  const projectId = requireInputString(input.projectId, "projectId");
-  const campaignId = requireInputString(input.campaignId, "campaignId");
+  const projectId = requiredInputString(input.projectId, "projectId");
+  const campaignId = requiredInputString(input.campaignId, "campaignId");
   const body = await requestSatismeterObject({
     apiKey: context.apiKey,
     fetcher: context.fetcher,
@@ -124,7 +124,7 @@ async function listProjectResponses(
     apiKey: context.apiKey,
     fetcher: context.fetcher,
     signal: context.signal,
-    path: `/projects/${encodeURIComponent(requireInputString(input.projectId, "projectId"))}/responses`,
+    path: `/projects/${encodeURIComponent(requiredInputString(input.projectId, "projectId"))}/responses`,
     query: buildQueryParams({
       startDate: optionalString(input.startDate),
       endDate: optionalString(input.endDate),
@@ -140,8 +140,8 @@ async function listSurveyResponses(
   input: Record<string, unknown>,
   context: ApiKeyProviderContext,
 ): Promise<Record<string, unknown>> {
-  const projectId = requireInputString(input.projectId, "projectId");
-  const campaignId = requireInputString(input.campaignId, "campaignId");
+  const projectId = requiredInputString(input.projectId, "projectId");
+  const campaignId = requiredInputString(input.campaignId, "campaignId");
   const body = await requestSatismeterObject({
     apiKey: context.apiKey,
     fetcher: context.fetcher,
@@ -162,8 +162,8 @@ async function getSurveyStatistics(
   input: Record<string, unknown>,
   context: ApiKeyProviderContext,
 ): Promise<Record<string, unknown>> {
-  const projectId = requireInputString(input.projectId, "projectId");
-  const campaignId = requireInputString(input.campaignId, "campaignId");
+  const projectId = requiredInputString(input.projectId, "projectId");
+  const campaignId = requiredInputString(input.campaignId, "campaignId");
   const body = await requestSatismeterObject({
     apiKey: context.apiKey,
     fetcher: context.fetcher,
@@ -213,7 +213,7 @@ async function requestSatismeterResponse(input: {
   query?: URLSearchParams;
   mode: SatismeterMode;
 }): Promise<{ httpResponse: Response; payload: unknown }> {
-  const timeout = createProviderTimeout(input.signal, satismeterDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.signal);
   try {
     const httpResponse = await satismeterFetch({
       apiKey: input.apiKey,
@@ -286,10 +286,6 @@ function buildQueryParams(input: Record<string, string | number | undefined>): U
     if (value !== undefined) query.set(key, String(value));
   }
   return query.size > 0 ? query : undefined;
-}
-
-function requireInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function readOptionalPageSize(value: unknown): number | undefined {

@@ -1,31 +1,24 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { NeverBounceActionName } from "./actions.ts";
 
-import {
-  compactObject,
-  optionalBoolean,
-  optionalInteger,
-  optionalRecord,
-  optionalString,
-  requiredString,
-} from "../../core/cast.ts";
+import { compactObject, optionalBoolean, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
   createProviderTimeout,
   defineApiKeyProviderExecutors,
   isAbortLikeError,
   providerUserAgent,
   ProviderRequestError,
+  requiredInputString,
 } from "../provider-runtime.ts";
 
 const service = "neverbounce";
 const neverbounceApiBaseUrl = "https://api.neverbounce.com/v4.2";
-const neverbounceDefaultRequestTimeoutMs = 30_000;
 
 type NeverBouncePhase = "validate" | "execute";
 type NeverBounceActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const neverbounceActionHandlers: Record<NeverBounceActionName, NeverBounceActionHandler> = {
+export const neverbounceActionHandlers: ProviderActionHandlers<"neverbounce", NeverBounceActionHandler> = {
   get_account_info(_input, context) {
     return requestNeverBounceJson("/account/info", context, "validate", {});
   },
@@ -150,7 +143,7 @@ async function requestNeverBounceRaw(
     }
   }
 
-  const timeout = createProviderTimeout(context.signal, neverbounceDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(context.signal);
   try {
     const headers: Record<string, string> = {
       accept: options.accept,
@@ -312,10 +305,6 @@ function extractNeverBounceErrorMessage(payload: unknown): string | undefined {
     optionalString(record?.error_message) ??
     optionalString(record?.reason)
   );
-}
-
-function requiredInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function requiredJobId(value: unknown, fieldName: string): string {

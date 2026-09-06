@@ -1,9 +1,14 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { ShipengineActionName } from "./actions.ts";
 
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "shipengine";
 const shipengineBaseUrl = "https://api.shipengine.com";
@@ -18,7 +23,7 @@ interface ShipengineRequestInput {
 type ShipengineRequestPhase = "validate" | "execute";
 type ShipengineActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const shipengineActionHandlers: Record<ShipengineActionName, ShipengineActionHandler> = {
+export const shipengineActionHandlers: ProviderActionHandlers<"shipengine", ShipengineActionHandler> = {
   validate_addresses(input, context) {
     return validateAddresses(input, context);
   },
@@ -327,3 +332,9 @@ function readFirstCarrierId(payload: unknown): string | undefined {
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://api.shipengine.com",
+  auth: { type: "api_key_header", name: "api-key" },
+});

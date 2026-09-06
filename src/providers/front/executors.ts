@@ -1,9 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { FrontActionName } from "./actions.ts";
 
 import { compactObject, optionalRecord, optionalString, requiredRecord } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  isAbortLikeError,
+  providerUserAgent,
+  ProviderRequestError,
+} from "../provider-runtime.ts";
 
 const service = "front";
 const frontApiBaseUrl = "https://api2.frontapp.com";
@@ -49,7 +54,7 @@ interface FrontTeammate {
   customFields: Record<string, unknown>;
 }
 
-export const frontActionHandlers: Record<FrontActionName, FrontActionHandler> = {
+export const frontActionHandlers: ProviderActionHandlers<"front", FrontActionHandler> = {
   list_contacts(input, context) {
     return listContacts(input, context);
   },
@@ -245,10 +250,6 @@ async function frontFetch(
       error,
     );
   }
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
 async function readFrontPayload(response: Response): Promise<unknown> {

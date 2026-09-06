@@ -1,16 +1,21 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext, ProviderRuntimeHandler } from "../provider-runtime.ts";
-import type { XAiActionName } from "./actions.ts";
 
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerUserAgent,
+  ProviderRequestError,
+  requiredResponseRecord,
+} from "../provider-runtime.ts";
 
 const service = "x_ai";
 const xAiApiBaseUrl = "https://api.x.ai/v1";
 
 type XAiActionHandler = ProviderRuntimeHandler<ApiKeyProviderContext>;
 
-export const xAiActionHandlers: Record<XAiActionName, XAiActionHandler> = {
+export const xAiActionHandlers: ProviderActionHandlers<"x_ai", XAiActionHandler> = {
   list_models(_input, context) {
     return xAiRequest(context, { path: "/models", mode: "execute" });
   },
@@ -46,7 +51,7 @@ export const credentialValidators: CredentialValidators = {
         mode: "validate",
       },
     );
-    const record = requireObject(payload, "xAI models response");
+    const record = requiredResponseRecord(payload, "xAI models response");
     const data = Array.isArray(record.data) ? record.data : [];
     return {
       profile: {
@@ -142,12 +147,4 @@ async function readXAiError(response: Response): Promise<{ type: string; code?: 
       message: raw || `x_ai request failed with ${response.status}`,
     };
   }
-}
-
-function requireObject(value: unknown, label: string): Record<string, unknown> {
-  const record = optionalRecord(value);
-  if (!record) {
-    throw new ProviderRequestError(502, `${label} must be an object`);
-  }
-  return record;
 }

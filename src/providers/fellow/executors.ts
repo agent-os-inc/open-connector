@@ -1,12 +1,13 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
-import type { FellowActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
-import { compactObject, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
+  requiredInputString,
 } from "../provider-runtime.ts";
 
 const service = "fellow";
@@ -25,7 +26,7 @@ interface FellowActionContext {
 
 type FellowActionHandler = (input: Record<string, unknown>, context: FellowActionContext) => Promise<unknown>;
 
-export const fellowActionHandlers: Record<FellowActionName, FellowActionHandler> = {
+export const fellowActionHandlers: ProviderActionHandlers<"fellow", FellowActionHandler> = {
   get_current_user(_input, context) {
     return requestFellowJson({
       context,
@@ -372,8 +373,4 @@ function readRecordField(payload: unknown, key: string, context: string): Record
     throw new ProviderRequestError(502, `${context} is invalid`, payload);
   }
   return child;
-}
-
-function requiredInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }

@@ -1,6 +1,6 @@
 import type { CredentialValidationResult } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext, ProviderRuntimeHandler } from "../provider-runtime.ts";
-import type { HighLevelActionName } from "./actions.ts";
 
 import { createHash } from "node:crypto";
 import {
@@ -15,7 +15,6 @@ import { createProviderTimeout, providerUserAgent, ProviderRequestError } from "
 
 const highLevelApiBaseUrl = "https://services.leadconnectorhq.com";
 const highLevelApiVersion = "2021-07-28";
-const highLevelDefaultRequestTimeoutMs = 30_000;
 
 type HighLevelRequestPhase = "validate" | "execute";
 
@@ -33,7 +32,7 @@ interface HighLevelRequestInput {
   body?: Record<string, unknown>;
 }
 
-export const highLevelActionHandlers: Record<HighLevelActionName, ProviderRuntimeHandler<HighLevelContext>> = {
+export const highLevelActionHandlers: ProviderActionHandlers<"high_level", ProviderRuntimeHandler<HighLevelContext>> = {
   async get_contact(input, context): Promise<unknown> {
     const payload = await requestHighLevelJson({
       path: `/contacts/${readPathId(input.contactId, "contactId")}`,
@@ -151,7 +150,7 @@ export function readHighLevelLocationId(value: unknown): string {
 }
 
 async function requestHighLevelJson(input: HighLevelRequestInput): Promise<Record<string, unknown>> {
-  const timeout = createProviderTimeout(input.signal, highLevelDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.signal);
   try {
     const response = await input.fetcher(buildHighLevelUrl(input.path), {
       method: input.method,

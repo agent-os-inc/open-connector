@@ -1,9 +1,9 @@
 import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { LivesessionActionName } from "./actions.ts";
 
 import { createHash } from "node:crypto";
-import { optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
+import { optionalInteger, optionalRecord, optionalString, rawStringOrNull } from "../../core/cast.ts";
 import { queryParams } from "../../core/request.ts";
 import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
 
@@ -14,7 +14,7 @@ const livesessionCredentialHelpUrl = "https://livesession.dev/docs/api/authentic
 
 type LivesessionActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const livesessionActionHandlers: Record<LivesessionActionName, LivesessionActionHandler> = {
+export const livesessionActionHandlers: ProviderActionHandlers<"livesession", LivesessionActionHandler> = {
   list_sessions(input, context) {
     return listSessions(input, context);
   },
@@ -115,11 +115,11 @@ async function requestLivesessionJson(input: {
 function normalizeSession(value: Record<string, unknown>): Record<string, unknown> {
   return {
     id: readString(value.id, "session.id"),
-    websiteId: nullableString(value.website_id),
-    sessionUrl: nullableString(value.session_url),
+    websiteId: rawStringOrNull(value.website_id),
+    sessionUrl: rawStringOrNull(value.session_url),
     creationTimestamp: readNullableInteger(value.creation_timestamp, "session.creation_timestamp"),
     duration: readNullableInteger(value.duration, "session.duration"),
-    device: nullableString(value.device),
+    device: rawStringOrNull(value.device),
     visitor: value.visitor == null ? null : requireObject(value.visitor, "LiveSession returned invalid nested object"),
     raw: value,
   };
@@ -174,10 +174,6 @@ function objectArray(value: unknown, errorMessage: string): Array<Record<string,
     throw new ProviderRequestError(502, errorMessage);
   }
   return value.map((item) => requireObject(item, errorMessage));
-}
-
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
 }
 
 function readString(value: unknown, fieldName: string): string {

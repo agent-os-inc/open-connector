@@ -1,13 +1,14 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ProviderFetch } from "../provider-runtime.ts";
-import type { LatticeActionName } from "./actions.ts";
 
-import { compactObject, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
+  requiredInputString,
 } from "../provider-runtime.ts";
 
 const service = "lattice";
@@ -35,7 +36,7 @@ interface LatticeRequestOptions {
 
 type LatticeActionHandler = (input: Record<string, unknown>, context: LatticeActionContext) => Promise<unknown>;
 
-export const latticeActionHandlers: Record<LatticeActionName, LatticeActionHandler> = {
+export const latticeActionHandlers: ProviderActionHandlers<"lattice", LatticeActionHandler> = {
   get_current_user(_input, context) {
     return getSingleLatticeResource("user", latticeValidationPath, context);
   },
@@ -47,7 +48,7 @@ export const latticeActionHandlers: Record<LatticeActionName, LatticeActionHandl
   get_user(input, context) {
     return getSingleLatticeResource(
       "user",
-      `/v1/user/${encodeURIComponent(readInputString(input.userId, "userId"))}`,
+      `/v1/user/${encodeURIComponent(requiredInputString(input.userId, "userId"))}`,
       context,
     );
   },
@@ -57,7 +58,7 @@ export const latticeActionHandlers: Record<LatticeActionName, LatticeActionHandl
   get_department(input, context) {
     return getSingleLatticeResource(
       "department",
-      `/v1/department/${encodeURIComponent(readInputString(input.departmentId, "departmentId"))}`,
+      `/v1/department/${encodeURIComponent(requiredInputString(input.departmentId, "departmentId"))}`,
       context,
     );
   },
@@ -72,7 +73,7 @@ export const latticeActionHandlers: Record<LatticeActionName, LatticeActionHandl
   get_goal(input, context) {
     return getSingleLatticeResource(
       "goal",
-      `/v1/goal/${encodeURIComponent(readInputString(input.goalId, "goalId"))}`,
+      `/v1/goal/${encodeURIComponent(requiredInputString(input.goalId, "goalId"))}`,
       context,
     );
   },
@@ -285,8 +286,4 @@ function resolveLatticeApiBaseUrl(metadata: Record<string, unknown>, dataResiden
   }
 
   return buildLatticeApiBaseUrl(normalizeLatticeDataResidency(metadata.dataResidency ?? dataResidency));
-}
-
-function readInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }

@@ -11,8 +11,38 @@ export type AuthDefinition =
   | {
       type: "oauth2";
       scopes: string[];
+      authorizationOptions?: OAuthAuthorizationOption[];
+      tokenEndpointAuthMethod?: "client_secret_basic" | "client_secret_post" | "none";
       clientConfigFields?: CredentialField[];
+      clientSetup?: OAuthClientSetup;
     };
+
+export interface OAuthAuthorizationOption {
+  id: string;
+  label: string;
+  description: string;
+  required: boolean;
+  defaultSelected: boolean;
+  risk: "standard" | "sensitive" | "destructive";
+  requires?: string[];
+}
+
+export type ProviderScenario =
+  | "ai"
+  | "cross-border-ecommerce"
+  | "communication"
+  | "docs"
+  | "productivity"
+  | "marketing"
+  | "data-storage"
+  | "developer"
+  | "other";
+
+/** How to register the provider OAuth app, shown while configuring the client. */
+export interface OAuthClientSetup {
+  docsUrl?: string;
+  steps: string[];
+}
 
 export interface CredentialField {
   key: string;
@@ -22,6 +52,8 @@ export interface CredentialField {
   secret: boolean;
   placeholder?: string;
   description?: string;
+  location?: "extra" | "secretExtra";
+  defaultValue?: string;
 }
 
 export type JsonSchema = Record<string, unknown>;
@@ -59,6 +91,7 @@ export interface ProviderDefinition {
   displayName: string;
   description?: string;
   categories: string[];
+  scenario?: ProviderScenario;
   authTypes: string[];
   auth: AuthDefinition[];
   homepageUrl?: string;
@@ -78,12 +111,34 @@ export interface ConnectionRecord {
   metadata: Record<string, unknown>;
 }
 
+export interface MarketplaceState {
+  configured: boolean;
+  enabled: boolean;
+  discoveryUrl: string;
+  status: "disabled" | "available" | "unavailable" | "auth_error";
+  marketplace?: { version: 1; id: string; name: string; pricing: "free" | "metered" };
+  compatibleActionCount: number;
+  compatibleProviderCount: number;
+  error?: string;
+}
+
+export interface ProviderPreference {
+  service: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface OAuthConfig {
   service: string;
   configured: boolean;
+  customClientAvailable?: boolean;
   clientId: string | null;
   expectedRedirectUri?: string;
   auth?: Extract<AuthDefinition, { type: "oauth2" }>;
+  requestedScopes?: string[] | null;
+  effectiveScopes?: string[];
+  extra?: Record<string, string>;
 }
 
 export interface RuntimeTokenSummary {
@@ -92,6 +147,7 @@ export interface RuntimeTokenSummary {
   allowedActions: string[];
   blockedActions: string[];
   allowedProxies: string[];
+  allowedConnections: string[];
   createdAt: string;
   lastUsedAt?: string;
 }
@@ -178,6 +234,8 @@ export interface AppData {
   runtimePolicy?: RuntimePolicyState;
   runs: RunLog[];
   runsNextCursor?: string;
+  marketplace?: MarketplaceState;
+  providerPreferences?: ProviderPreference[];
 }
 
 export interface OverviewSummary {
@@ -196,6 +254,7 @@ export interface ProviderConnectionStatus {
   oauthClientRequired: boolean;
   connections: ConnectionRecord[];
   connection?: ConnectionRecord;
+  marketplaceConnection?: ConnectionRecord;
 }
 
 const firstProviderService = "fusion-api";
@@ -231,10 +290,7 @@ const recommendedProviderServices = [
   "stripe",
   "googleanalytics",
   "googlesearchconsole",
-  "facebookleadads",
-  "metaads",
   "linkedin",
-  "salesforce",
   "pipedrive",
   "zendesk",
   "intercom",
@@ -265,6 +321,7 @@ export const emptyData: AppData = {
     runtime: emptyPolicyRules(),
   },
   runs: [],
+  providerPreferences: [],
 };
 
 function emptyPolicyRules(): PolicyRules {
@@ -298,6 +355,7 @@ export function resolveProviderConnectionStatus(
   const noSetupRequired = isNoAuthOnlyProvider(provider);
   const serviceConnections = noSetupRequired ? [] : usableConnectionsForService(connections, provider.service);
   const connection = pickUsableCredentialConnection(serviceConnections);
+  const marketplaceConnection = serviceConnections.find((item) => item.authType === "marketplace");
   return {
     noSetupRequired,
     connected: connection != null,
@@ -305,6 +363,7 @@ export function resolveProviderConnectionStatus(
       connection == null && providerRequiresOAuth(provider) && !oauthClientConfigured(provider.service, oauthConfigs),
     connections: serviceConnections,
     connection,
+    marketplaceConnection,
   };
 }
 
@@ -326,7 +385,7 @@ function isUsableCredentialConnection(connection: ConnectionRecord | undefined):
   return (
     connection != null &&
     connection.authType !== "no_auth" &&
-    connection.virtual !== true &&
+    (connection.virtual !== true || connection.authType === "marketplace") &&
     connection.configured !== false
   );
 }
@@ -370,6 +429,21 @@ export function filterProviders(providers: ProviderDefinition[], query: string):
   );
 }
 
+export function filterProvidersByCategory(providers: ProviderDefinition[], category: string): ProviderDefinition[] {
+  if (category === "all") return providers;
+  return providers.filter((provider) => provider.categories.includes(category));
+}
+
+export function providerCategoryCounts(providers: ProviderDefinition[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const provider of providers) {
+    for (const category of provider.categories) {
+      counts.set(category, (counts.get(category) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 export function sortProviders(
   providers: ProviderDefinition[],
   connectionsByService: Map<string, ConnectionRecord>,
@@ -405,13 +479,6 @@ function compactProviderService(service: string): string {
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim()
     .replace(/\s+/g, "");
-}
-
-export function firstProviderByConnectionStatus(
-  providers: ProviderDefinition[],
-  connections: ConnectionRecord[],
-): ProviderDefinition | undefined {
-  return sortProviders(providers, new Map(connections.map((connection) => [connection.service, connection])))[0];
 }
 
 export function filterActions(actions: ActionDefinition[], query: string, service: string | null): ActionDefinition[] {
@@ -493,8 +560,10 @@ export function compactJson(value: unknown): string {
   return text.length > 120 ? `${text.slice(0, 117)}...` : text;
 }
 
+// These mirror src/core/json-schema.ts (readSchemaProperties/readSchemaRequired/describeSchemaType) and must be
+// kept in sync by hand because the web build cannot import src/.
 function readProperties(schema: JsonSchema): Record<string, JsonSchema> {
-  return schema.properties && typeof schema.properties === "object"
+  return schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
     ? (schema.properties as Record<string, JsonSchema>)
     : {};
 }

@@ -1,25 +1,25 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { MomentumIoActionName } from "./actions.ts";
 
-import { optionalInteger, optionalString, requiredString } from "../../core/cast.ts";
+import { optionalBoolean, optionalInteger, optionalString, requiredString } from "../../core/cast.ts";
 import {
   createProviderTimeout,
   defineApiKeyProviderExecutors,
   isAbortLikeError,
+  providerInputError,
   providerUserAgent,
   ProviderRequestError,
 } from "../provider-runtime.ts";
 
 const service = "momentum_io";
 const momentumIoApiBaseUrl = "https://api.momentum.io";
-const momentumIoDefaultRequestTimeoutMs = 30_000;
 const momentumIoValidationPath = "/v1/users?pageSize=1";
 
 type MomentumIoRequestPhase = "validate" | "execute";
 type MomentumIoActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const momentumIoActionHandlers: Record<MomentumIoActionName, MomentumIoActionHandler> = {
+export const momentumIoActionHandlers: ProviderActionHandlers<"momentum_io", MomentumIoActionHandler> = {
   list_users(input, context) {
     return requestMomentumIoJson(buildListUsersPath(input), context, "execute");
   },
@@ -134,7 +134,7 @@ async function requestMomentumIoJson(
 ): Promise<unknown> {
   let response: Response;
   let payload: unknown;
-  const timeout = createProviderTimeout(context.signal, momentumIoDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(context.signal);
 
   try {
     response = await context.fetcher(new URL(path, momentumIoApiBaseUrl), {
@@ -222,10 +222,6 @@ function extractMomentumIoErrorMessage(payload: unknown): string | undefined {
   );
 }
 
-function optionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
 function optionalStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -239,8 +235,4 @@ function readRequiredInteger(value: unknown, fieldName: string): number {
     throw new ProviderRequestError(400, `${fieldName} is required`);
   }
   return parsed;
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

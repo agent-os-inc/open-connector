@@ -1,10 +1,18 @@
-import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type {
+  CredentialValidators,
+  ExecutionContext,
+  ProviderExecutors,
+  ProviderProxyExecutor,
+} from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { compactObject, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
+  credentialProviderProxyBaseUrl,
   defineProviderExecutors,
-  providerUserAgent,
+  defineProviderProxy,
   ProviderRequestError,
+  providerUserAgent,
   requireApiKeyCredential,
 } from "../provider-runtime.ts";
 
@@ -38,7 +46,7 @@ interface ActivecampaignRequestOptions {
   notFoundAsInvalidInput?: boolean;
 }
 
-export const activecampaignActionHandlers: Record<string, ActivecampaignActionHandler> = {
+export const activecampaignActionHandlers: ProviderActionHandlers<"activecampaign", ActivecampaignActionHandler> = {
   get_current_user(input, context) {
     return getCurrentUser(input, context);
   },
@@ -659,3 +667,9 @@ function endsWithPathSegment(value: string, segment: string) {
   }
   return value.slice(value.length - segment.length) === segment;
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: credentialProviderProxyBaseUrl("apiUrl"),
+  auth: { type: "api_key_header", name: "api-token" },
+});

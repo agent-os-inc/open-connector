@@ -1,11 +1,19 @@
-import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type {
+  CredentialValidators,
+  ExecutionContext,
+  ProviderExecutors,
+  ProviderProxyExecutor,
+} from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { compactObject, nullableInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import { assertPublicHttpUrl } from "../../core/request.ts";
 import {
+  credentialProviderProxyBaseUrl,
   defineProviderExecutors,
-  providerUserAgent,
+  defineProviderProxy,
   ProviderRequestError,
+  providerUserAgent,
   requireApiKeyCredential,
 } from "../provider-runtime.ts";
 
@@ -32,7 +40,7 @@ interface EspocrmRequestOptions extends EspocrmActionContext {
 
 type EspocrmActionHandler = (input: Record<string, unknown>, context: EspocrmActionContext) => Promise<unknown>;
 
-const espocrmActionHandlers: Record<string, EspocrmActionHandler> = {
+const espocrmActionHandlers: ProviderActionHandlers<"espocrm", EspocrmActionHandler> = {
   async get_app_user(_input, context) {
     const payload = await requestEspocrm({
       ...context,
@@ -409,3 +417,9 @@ function encodeOptionalJson(value: unknown): string | undefined {
   }
   return JSON.stringify(value);
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: credentialProviderProxyBaseUrl("baseUrl"),
+  auth: { type: "api_key_header", name: "x-api-key" },
+});

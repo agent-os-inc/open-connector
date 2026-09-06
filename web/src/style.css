@@ -7,6 +7,8 @@
 @import "./styles/shell.css";
 @import "./styles/overview.css";
 @import "./styles/providers.css";
+@import "./styles/oauth-apps.css";
+@import "./styles/marketplace.css";
 @import "./styles/actions.css";
 @import "./styles/runs.css";
 @import "./styles/access.css";

@@ -1,5 +1,6 @@
 import type { IConnectionStore, StoredConnection } from "./connection-service.ts";
 import type { ActionExecutor, CredentialValidators, ProviderDefinition, ResolvedCredential } from "./core/types.ts";
+import type { MarketplaceService } from "./marketplace/marketplace-service.ts";
 import type { OAuthClientConfig } from "./oauth/oauth-client-config-service.ts";
 import type { IProviderLoader } from "./providers/provider-loader.ts";
 
@@ -169,6 +170,81 @@ describe("ConnectionService", () => {
         },
       },
     ]);
+  });
+
+  // The listing puts the Marketplace entry after whatever already answers for the provider, and
+  // only that first entry is the default one.
+  it("orders Marketplace entries after stored and no_auth connections", async () => {
+    const services = ["uptimerobot", "hackernews", "database"];
+    const marketplace = {
+      getSnapshot: () => ({
+        definition: { id: "community", name: "Community", pricing: { model: "included" } },
+        actionsByService: new Map(services.map((service) => [service, new Set([`${service}.example`])])),
+      }),
+      listProviderPreferences: async () =>
+        services.map((service) => ({
+          service,
+          enabled: true,
+          createdAt: "2026-08-27T00:00:00.000Z",
+          updatedAt: "2026-08-27T00:00:00.000Z",
+        })),
+    } as unknown as MarketplaceService;
+    const service = new ConnectionService({
+      catalog: createCatalogStore([apiKeyProvider, hackernewsProvider, customCredentialProvider]),
+      marketplace,
+      providerLoader: new FakeProviderLoader(),
+      store: new MemoryConnectionStore(),
+    });
+    await service.connectWithApiKey("uptimerobot", {
+      values: {
+        apiKey: "test-key",
+        accountId: "account-1",
+      },
+    });
+
+    const summaries = await service.listConnections();
+    expect(summaries.map((summary) => [summary.service, summary.authType, summary.default])).toEqual([
+      ["database", "marketplace", true],
+      ["hackernews", "no_auth", true],
+      ["hackernews", "marketplace", false],
+      ["uptimerobot", "api_key", true],
+      ["uptimerobot", "marketplace", false],
+    ]);
+    await expect(service.listConnectionsByService("uptimerobot")).resolves.toEqual(
+      summaries.filter((summary) => summary.service === "uptimerobot"),
+    );
+  });
+
+  it("derives an explicit Marketplace connection name from discovery metadata", async () => {
+    const marketplace = {
+      getSnapshot: () => ({
+        definition: { id: "community" },
+        actionsByService: new Map([["uptimerobot", new Set(["uptimerobot.status"])]]),
+      }),
+      listProviderPreferences: async () => [
+        {
+          service: "uptimerobot",
+          enabled: true,
+          createdAt: "2026-08-27T00:00:00.000Z",
+          updatedAt: "2026-08-27T00:00:00.000Z",
+        },
+      ],
+    } as unknown as MarketplaceService;
+    const service = new ConnectionService({
+      catalog: createCatalogStore([apiKeyProvider]),
+      marketplace,
+      providerLoader: new FakeProviderLoader(),
+      store: new MemoryConnectionStore(),
+    });
+
+    await expect(service.getConnectionSummary("uptimerobot", "marketplace_community")).resolves.toMatchObject({
+      id: "marketplace:community:uptimerobot",
+      connectionName: "marketplace_community",
+      authType: "marketplace",
+    });
+    await expect(service.getConnectionSummary("uptimerobot", "marketplace_oomol")).rejects.toMatchObject({
+      code: "connection_not_found",
+    });
   });
 
   it("stores API key credentials as resolved credentials", async () => {
@@ -362,6 +438,93 @@ describe("ConnectionService", () => {
     expect(nativeFetchThis).toBeUndefined();
   });
 
+  it("propagates a request signal to credential validators and aborts them without storing the credential", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    let validationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      validationStarted = resolve;
+    });
+    const service = createService([apiKeyProvider], {
+      providerLoader: new FakeProviderLoader({
+        async apiKey(_input, options) {
+          receivedSignal = options.signal;
+          validationStarted?.();
+          await new Promise<void>((_resolve, reject) => {
+            if (!options.signal) {
+              reject(new Error("request signal missing"));
+              return;
+            }
+            options.signal.addEventListener("abort", () => reject(new Error("request aborted")), { once: true });
+          });
+        },
+      }),
+    });
+
+    const connectPromise = service.connectWithApiKey("uptimerobot", {
+      values: {
+        apiKey: "valid-key",
+        accountId: "account-1",
+      },
+      signal: controller.signal,
+    });
+    await started;
+    controller.abort();
+
+    await expect(connectPromise).rejects.toMatchObject({
+      code: "connection_cancelled",
+      message: "Credential validation was cancelled.",
+    });
+    expect(receivedSignal).toBe(controller.signal);
+    expect(receivedSignal?.aborted).toBe(true);
+    await expect(service.getCredential("uptimerobot")).resolves.toBeUndefined();
+  });
+
+  it("does not load credential validators for an already cancelled connection request", async () => {
+    const providerLoader = new FakeProviderLoader({
+      async apiKey() {
+        return {};
+      },
+    });
+    const loadValidators = vi.spyOn(providerLoader, "loadCredentialValidators");
+    const controller = new AbortController();
+    controller.abort();
+    const service = createService([apiKeyProvider], { providerLoader });
+
+    await expect(
+      service.connectWithApiKey("uptimerobot", {
+        values: {
+          apiKey: "valid-key",
+          accountId: "account-1",
+        },
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({
+      code: "connection_cancelled",
+    });
+    expect(loadValidators).not.toHaveBeenCalled();
+    await expect(service.getCredential("uptimerobot")).resolves.toBeUndefined();
+  });
+
+  it("does not create a cancellation signal for callers that omit one", async () => {
+    const service = createService([apiKeyProvider], {
+      providerLoader: new FakeProviderLoader({
+        async apiKey(_input, options) {
+          expect(options.signal).toBeUndefined();
+        },
+      }),
+    });
+
+    await expect(
+      service.connectWithApiKey("uptimerobot", {
+        values: {
+          apiKey: "valid-key",
+          accountId: "account-1",
+        },
+      }),
+    ).resolves.toMatchObject({ service: "uptimerobot", configured: true });
+  });
+
   it("exposes connection profiles to local users and agents", async () => {
     const service = createService([apiKeyProvider], {
       providerLoader: new FakeProviderLoader({
@@ -431,6 +594,44 @@ describe("ConnectionService", () => {
       authType: "oauth2",
       accessToken: "access-token",
     });
+  });
+
+  it("does not store OAuth credentials when validation is cancelled", async () => {
+    const controller = new AbortController();
+    let validationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      validationStarted = resolve;
+    });
+    const service = createService([oauthProvider], {
+      providerLoader: new FakeProviderLoader({
+        async oauth2(_input, options) {
+          validationStarted?.();
+          await new Promise<void>((_resolve, reject) => {
+            options.signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true });
+          });
+        },
+      }),
+    });
+
+    const connectPromise = service.setOAuthCredential(
+      "example",
+      {
+        authType: "oauth2",
+        accessToken: "access-token",
+        tokenType: "Bearer",
+        profile: testProfile,
+        metadata: {},
+      },
+      undefined,
+      controller.signal,
+    );
+    await started;
+    controller.abort();
+
+    await expect(connectPromise).rejects.toMatchObject({
+      code: "connection_cancelled",
+    });
+    await expect(service.getCredential("example")).resolves.toBeUndefined();
   });
 
   it("refreshes expired OAuth credentials before returning them", async () => {
@@ -812,6 +1013,55 @@ describe("ConnectionService", () => {
       apiKey: "original-key",
       profile: { accountId: "example-account" },
     });
+  });
+
+  it("resolves each service credential once per forConnection scope", async () => {
+    const store = new MemoryConnectionStore();
+    const service = createService([apiKeyProvider, customCredentialProvider], { store });
+    await store.set("uptimerobot", "default", {
+      authType: "api_key",
+      apiKey: "monitor-key",
+      values: { apiKey: "monitor-key", accountId: "account-1" },
+      profile: testProfile,
+      metadata: {},
+    });
+    await store.set("database", "default", {
+      authType: "custom_credential",
+      values: { host: "db.example.com", password: "secret" },
+      profile: testProfile,
+      metadata: {},
+    });
+    const get = vi.spyOn(store, "get");
+
+    const connection = service.forConnection();
+    await expect(connection.getCredential("uptimerobot")).resolves.toMatchObject({ apiKey: "monitor-key" });
+    await expect(connection.getCredential("uptimerobot")).resolves.toMatchObject({ apiKey: "monitor-key" });
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await expect(connection.getCredential("database")).resolves.toMatchObject({
+      values: { host: "db.example.com" },
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+
+    // A fresh scope is a fresh request: it must read the store again rather than serve a stale credential.
+    await expect(service.forConnection().getCredential("uptimerobot")).resolves.toMatchObject({
+      apiKey: "monitor-key",
+    });
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+
+  it("replays a failed credential resolution without reading the store again", async () => {
+    const store = new MemoryConnectionStore();
+    const service = createService([apiKeyProvider], { store });
+    const get = vi.spyOn(store, "get");
+
+    const connection = service.forConnection("missing");
+    const first = await connection.getCredential("uptimerobot").catch((error: unknown) => error);
+    const second = await connection.getCredential("uptimerobot").catch((error: unknown) => error);
+
+    expect(first).toMatchObject({ code: "connection_not_found" });
+    expect(second).toBe(first);
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });
 

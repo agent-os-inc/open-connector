@@ -1,8 +1,14 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { compactObject, optionalBoolean, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "updown_io";
 const updownIoApiBaseUrl = "https://updown.io";
@@ -10,7 +16,7 @@ const updownIoApiBaseUrl = "https://updown.io";
 type UpdownRequestPhase = "validate" | "execute";
 type UpdownIoActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const updownIoActionHandlers: Record<string, UpdownIoActionHandler> = {
+export const updownIoActionHandlers: ProviderActionHandlers<"updown_io", UpdownIoActionHandler> = {
   async list_checks(_input, context) {
     return requestUpdownJson({ context, path: "/api/checks", phase: "execute" });
   },
@@ -216,3 +222,9 @@ function appendFormRecord(body: URLSearchParams, key: string, value: unknown): v
     if (text !== undefined) body.append(`${key}[${childKey}]`, text);
   }
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://updown.io",
+  auth: { type: "api_key_header", name: "x-api-key" },
+});

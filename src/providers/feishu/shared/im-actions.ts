@@ -43,9 +43,11 @@ export function createFeishuImActions(input: FeishuImActionOptions): readonly Ac
     input.identity === "user" ? ["im:message.send_as_user", "im:message"] : ["im:message:send_as_bot"];
   const readPermissions =
     input.identity === "user"
-      ? ["im:message.group_msg:get_as_user", "im:message.p2p_msg:get_as_user"]
+      ? ["im:message:readonly", "im:message.group_msg:get_as_user", "im:message.p2p_msg:get_as_user"]
       : ["im:message.group_msg", "im:message.p2p_msg:readonly"];
-  const chatWritePermissions = input.identity === "user" ? ["im:chat:create", "im:chat:update"] : ["im:chat"];
+  const createChatPermissions = input.identity === "user" ? ["im:chat:create_by_user"] : ["im:chat:create"];
+  const updateChatPermissions = ["im:chat:update"];
+  const manageChatMemberPermissions = ["im:chat.members:write_only"];
   const actions: ActionDefinition[] = [
     defineProviderAction(input.service, {
       name: "send_rich_message",
@@ -134,8 +136,8 @@ export function createFeishuImActions(input: FeishuImActionOptions): readonly Ac
     defineProviderAction(input.service, {
       name: "create_chat",
       description: "Create a Feishu group or topic chat with initial users and bots.",
-      requiredScopes: chatWritePermissions,
-      providerPermissions: chatWritePermissions,
+      requiredScopes: createChatPermissions,
+      providerPermissions: createChatPermissions,
       inputSchema: s.object(
         "Describe the chat to create.",
         {
@@ -167,22 +169,19 @@ export function createFeishuImActions(input: FeishuImActionOptions): readonly Ac
     }),
     defineProviderAction(input.service, {
       name: "update_chat",
-      description: "Update a Feishu chat's profile and membership-related settings.",
-      requiredScopes: chatWritePermissions,
-      providerPermissions: chatWritePermissions,
+      description: "Update a Feishu chat's name or description.",
+      requiredScopes: updateChatPermissions,
+      providerPermissions: updateChatPermissions,
       inputSchema: s.object(
         "Identify the chat and provide fields to update.",
         {
           chatId: s.string("The chat identifier.", { minLength: 1 }),
-          name: s.string("The new chat name."),
-          description: s.string("The new chat description."),
-          ownerId: s.string("The new owner identifier."),
+          name: s.string("The new chat name.", { maxLength: 60 }),
+          description: s.string("The new chat description.", { maxLength: 100 }),
           userIdType: userIdTypeSchema,
-          chatType: s.stringEnum("The new group discoverability type.", ["private", "public"]),
-          external: s.boolean("Whether the chat may contain external users."),
         },
         {
-          optional: ["name", "description", "ownerId", "userIdType", "chatType", "external"],
+          optional: ["name", "description", "userIdType"],
         },
       ),
       outputSchema: genericOutputSchema,
@@ -190,16 +189,16 @@ export function createFeishuImActions(input: FeishuImActionOptions): readonly Ac
     defineProviderAction(input.service, {
       name: "add_chat_members",
       description: "Add users or bots to a Feishu chat.",
-      requiredScopes: chatWritePermissions,
-      providerPermissions: chatWritePermissions,
+      requiredScopes: manageChatMemberPermissions,
+      providerPermissions: manageChatMemberPermissions,
       inputSchema: chatMembersInputSchema("Identify the chat and members to add."),
       outputSchema: genericOutputSchema,
     }),
     defineProviderAction(input.service, {
       name: "remove_chat_members",
       description: "Remove users or bots from a Feishu chat.",
-      requiredScopes: chatWritePermissions,
-      providerPermissions: chatWritePermissions,
+      requiredScopes: manageChatMemberPermissions,
+      providerPermissions: manageChatMemberPermissions,
       inputSchema: chatMembersInputSchema("Identify the chat and members to remove."),
       outputSchema: genericOutputSchema,
     }),

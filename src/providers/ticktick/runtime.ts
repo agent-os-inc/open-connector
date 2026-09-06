@@ -1,10 +1,17 @@
 import type { CredentialValidationResult } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { BearerProviderContext } from "../provider-runtime.ts";
-import type { TicktickActionName } from "./actions.ts";
 
 import { createHash } from "node:crypto";
-import { compactObject, objectArray, optionalBoolean, optionalInteger, optionalString } from "../../core/cast.ts";
-import { ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  compactObject,
+  objectArray,
+  optionalBoolean,
+  optionalInteger,
+  optionalNumber,
+  optionalString,
+} from "../../core/cast.ts";
+import { providerInputError, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
 
 const ticktickApiBaseUrl = "https://api.ticktick.com";
 const ticktickProviderScopes = ["ticktick.read", "ticktick.write"] as const;
@@ -32,7 +39,7 @@ interface TicktickProjectData {
   columns: TicktickPayload[];
 }
 
-export const ticktickActionHandlers: Record<TicktickActionName, TicktickHandler> = {
+export const ticktickActionHandlers: ProviderActionHandlers<"ticktick", TicktickHandler> = {
   async get_user_project(_input, context) {
     return { projects: await fetchProjects(context, "execute") };
   },
@@ -93,6 +100,24 @@ export const ticktickActionHandlers: Record<TicktickActionName, TicktickHandler>
   },
   async create_task2(input, context) {
     return ticktickActionHandlers.create_task(input, context);
+  },
+  async batch_add_tasks(input, context) {
+    const tasks = objectArray(input.tasks, "tasks").map((task) => buildCreateTaskBody(task));
+    const { payload } = await requestTicktickJson<TicktickPayload | TicktickPayload[]>({
+      ...requestContext(context),
+      path: "/open/v1/task/batch",
+      method: "POST",
+      body: { add: tasks },
+      phase: "execute",
+    });
+    const payloadAny = payload as TicktickPayload | TicktickPayload[] | undefined;
+    const add = (payloadAny as { add?: TicktickPayload[] } | undefined)?.add;
+    const nested = (payloadAny as { tasks?: TicktickPayload[] } | undefined)?.tasks;
+    const created = Array.isArray(payloadAny) ? payloadAny : (add ?? nested);
+    return {
+      tasks: created ?? [],
+      createdCount: created?.length ?? tasks.length,
+    };
   },
   async update_task(input, context) {
     const projectId = resolveProjectId(input);
@@ -489,6 +514,7 @@ function buildCreateTaskBody(input: Record<string, unknown>): Record<string, unk
     priority: normalizePriority(input.priority),
     sortOrder: optionalInteger(input.sortOrder),
     items: normalizeChecklistItems(input.items),
+    tags: normalizeStringArray(input.tags, "tags"),
   });
 }
 
@@ -514,6 +540,7 @@ function buildUpdateTaskBody(
     priority: normalizePriority(input.priority),
     sortOrder: optionalInteger(input.sortOrder),
     items: normalizeChecklistItems(input.items),
+    tags: normalizeStringArray(input.tags, "tags"),
   });
 }
 
@@ -650,10 +677,6 @@ function requireInteger(value: unknown, fieldName: string): number {
   return parsed;
 }
 
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function requireObjectPayload(value: unknown, fieldName: string): TicktickPayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ProviderRequestError(502, `${fieldName} must be an object`);
@@ -668,10 +691,6 @@ function requireObjectArrayPayload(value: unknown, fieldName: string): TicktickP
 
 function optionalObjectArrayPayload(value: unknown): TicktickPayload[] {
   return value == null ? [] : requireObjectArrayPayload(value, "ticktick nested array response");
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }
 
 function hashAccessToken(accessToken: string): string {

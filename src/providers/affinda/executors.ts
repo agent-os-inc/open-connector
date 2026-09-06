@@ -1,9 +1,11 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { compactObject, optionalBoolean, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
 import { encodePathSegment } from "../../core/request.ts";
 import {
   defineProviderExecutors,
+  providerInputError,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
@@ -32,7 +34,7 @@ interface AffindaActionContext {
 
 type AffindaActionHandler = (input: Record<string, unknown>, context: AffindaActionContext) => Promise<unknown>;
 
-export const affindaActionHandlers: Record<string, AffindaActionHandler> = {
+export const affindaActionHandlers: ProviderActionHandlers<"affinda", AffindaActionHandler> = {
   async list_organizations(_input, context) {
     const payload = await requestAffindaJson({
       path: affindaOrganizationsPath,
@@ -386,8 +388,4 @@ function resolveAffindaApiBaseUrl(input: Record<string, unknown> | undefined): s
     throw new ProviderRequestError(400, "apiBaseUrl must be an official Affinda API URL");
   }
   return normalized;
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

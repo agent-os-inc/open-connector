@@ -1,4 +1,5 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { optionalRawString, optionalRecord, requiredString } from "../../core/cast.ts";
@@ -6,18 +7,18 @@ import {
   createProviderTimeout,
   defineApiKeyProviderExecutors,
   isAbortLikeError,
+  providerInputError,
   ProviderRequestError,
   providerUserAgent,
 } from "../provider-runtime.ts";
 
 const service = "quipteams";
 const quipteamsApiBaseUrl = "https://api.quipteams.com";
-const quipteamsRequestTimeoutMs = 30_000;
 
 type QuipteamsRequestPhase = "validate" | "execute";
 type QuipteamsActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const quipteamsActionHandlers: Record<string, QuipteamsActionHandler> = {
+export const quipteamsActionHandlers: ProviderActionHandlers<"quipteams", QuipteamsActionHandler> = {
   list_quotes(input, context) {
     return requestQuipteamsList("quotes", "/api/v1/quotes", input, context);
   },
@@ -132,7 +133,7 @@ async function requestQuipteamsJson(input: {
   context: Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">;
   phase: QuipteamsRequestPhase;
 }): Promise<unknown> {
-  const timeout = createProviderTimeout(input.context.signal, quipteamsRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
   let response: Response;
   let payload: unknown;
   try {
@@ -305,13 +306,9 @@ function isObjectPayload(value: unknown): value is Record<string, unknown> {
 }
 
 function readPathSegment(value: unknown, fieldName: string): string {
-  const trimmed = requiredString(value, fieldName, invalidInputError);
+  const trimmed = requiredString(value, fieldName, providerInputError);
   if (trimmed.includes("/") || trimmed.includes("?") || trimmed.includes("#")) {
     throw new ProviderRequestError(400, `${fieldName} must be a Quipteams path segment`);
   }
   return encodeURIComponent(trimmed);
-}
-
-function invalidInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

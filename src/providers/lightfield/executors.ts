@@ -1,9 +1,15 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { LightfieldActionName } from "./actions.ts";
 
 import { compactObject, optionalString, requiredString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import { encodePathSegment } from "../../core/request.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerInputError,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "lightfield";
 const lightfieldApiBaseUrl = "https://api.lightfield.app";
@@ -12,7 +18,7 @@ const lightfieldApiVersion = "2026-03-01";
 type LightfieldRequestMode = "validate" | "execute";
 type LightfieldActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const lightfieldActionHandlers: Record<LightfieldActionName, LightfieldActionHandler> = {
+export const lightfieldActionHandlers: ProviderActionHandlers<"lightfield", LightfieldActionHandler> = {
   get_api_key_metadata(_input, context) {
     return executeGetApiKeyMetadata(context);
   },
@@ -25,7 +31,7 @@ export const lightfieldActionHandlers: Record<LightfieldActionName, LightfieldAc
     return { definitions: readArrayProperty(payload, "data", "Lightfield object definitions") };
   },
   async list_custom_object_records(input, context) {
-    const entitySlug = encodePathSegment(requiredString(input.entitySlug, "entitySlug", invalidInputError));
+    const entitySlug = encodePathSegment(requiredString(input.entitySlug, "entitySlug", providerInputError));
     return normalizeListPayload(
       await requestLightfield({
         path: `/v1/objects/${entitySlug}`,
@@ -36,8 +42,8 @@ export const lightfieldActionHandlers: Record<LightfieldActionName, LightfieldAc
     );
   },
   async get_custom_object_record(input, context) {
-    const entitySlug = encodePathSegment(requiredString(input.entitySlug, "entitySlug", invalidInputError));
-    const id = encodePathSegment(requiredString(input.id, "id", invalidInputError));
+    const entitySlug = encodePathSegment(requiredString(input.entitySlug, "entitySlug", providerInputError));
+    const id = encodePathSegment(requiredString(input.id, "id", providerInputError));
     return {
       record: await requestLightfield({
         path: `/v1/objects/${entitySlug}/values/${id}`,
@@ -132,7 +138,7 @@ async function getLightfieldRecord(
   input: Record<string, unknown>,
   context: ApiKeyProviderContext,
 ): Promise<unknown> {
-  const id = encodePathSegment(requiredString(input.id, "id", invalidInputError));
+  const id = encodePathSegment(requiredString(input.id, "id", providerInputError));
   return {
     record: await requestLightfield({
       path: `${path}/${id}`,
@@ -344,12 +350,4 @@ function readNumberProperty(payload: Record<string, unknown>, key: string, label
     throw new ProviderRequestError(502, `Invalid ${label}.`, payload);
   }
   return value;
-}
-
-function encodePathSegment(value: string): string {
-  return encodeURIComponent(value);
-}
-
-function invalidInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

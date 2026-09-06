@@ -120,13 +120,16 @@ export async function readBoundedResponseBytes(
   return bytes;
 }
 
-// Egress targets are classified into two tiers for the SSRF guard:
+// Egress targets are classified into three tiers for the SSRF guard:
 //
 //   - "reserved" (localHostnames, cloudMetadataHostnames, localHostnameSuffixes,
 //     reservedIpv4Cidrs, reservedIpv6Cidrs): loopback, link-local, cloud-metadata,
 //     multicast, and other unsafe special-use ranges. ALWAYS blocked — the
 //     private-network opt-in never unblocks these, because they are the classic
 //     SSRF escalation targets ("don't let the deployment attack itself").
+//   - "VPN-mapped" (vpnMappedIpv4Cidrs): benchmark address space used by some
+//     zero-trust VPNs to tunnel public SaaS traffic. Blocked by default, but a
+//     deployment may allow it for explicitly trusted hostnames.
 //   - "private" (privateHostnameSuffixes, privateIpv4Cidrs, privateIpv6Cidrs):
 //     RFC 1918 / CGNAT / IPv6 ULA LAN ranges and private hostname suffixes.
 //     Blocked by default, but reachable once a self-hosted deployment opts in via
@@ -138,7 +141,12 @@ export async function readBoundedResponseBytes(
 // Always blocked: names that resolve to loopback, regardless of the flag.
 const localHostnames = new Set(["localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"]);
 // Always blocked: cloud instance-metadata endpoints (prime SSRF escalation targets).
-const cloudMetadataHostnames = new Set(["instance-data.ec2.internal", "metadata.google.internal", "metadata.goog"]);
+const cloudMetadataHostnames = new Set([
+  "instance-data.ec2.internal",
+  "metadata",
+  "metadata.google.internal",
+  "metadata.goog",
+]);
 // Always blocked: .localhost (RFC 6761 loopback) and the localhost.localdomain alias.
 const localHostnameSuffixes = [".localhost", ".localdomain"];
 // Flag-gated: private hostname suffixes with mixed standards status — .local (mDNS special-use,
@@ -153,8 +161,8 @@ const privateIpv4Cidrs: Array<[number, number]> = [
   [ipv4ToNumber("192.168.0.0"), 16],
 ];
 // Always blocked (opt-in never unblocks these): this-network (0/8), loopback (127/8),
-// link-local incl. the 169.254.169.254 metadata host (169.254/16), IANA protocol/documentation/
-// benchmark blocks, multicast (224/4), and future-use (240/4). 100.100.100.200/32 is the Alibaba
+// link-local incl. the 169.254.169.254 metadata host (169.254/16), IANA protocol/documentation
+// blocks, multicast (224/4), and future-use (240/4). 100.100.100.200/32 is the Alibaba
 // Cloud metadata endpoint — it sits inside CGNAT (100.64/10) but is pinned here so it stays
 // blocked even after opting into private networks.
 const reservedIpv4Cidrs: Array<[number, number]> = [
@@ -164,14 +172,17 @@ const reservedIpv4Cidrs: Array<[number, number]> = [
   [ipv4ToNumber("169.254.0.0"), 16],
   [ipv4ToNumber("192.0.0.0"), 24],
   [ipv4ToNumber("192.0.2.0"), 24],
-  [ipv4ToNumber("198.18.0.0"), 15],
   [ipv4ToNumber("198.51.100.0"), 24],
   [ipv4ToNumber("203.0.113.0"), 24],
   [ipv4ToNumber("224.0.0.0"), 4],
   [ipv4ToNumber("240.0.0.0"), 4],
 ];
-// Always blocked: unspecified/loopback (::, ::1), link-local (fe80::/10), multicast (ff00::/8),
-// plus discard, documentation, benchmark, and other special-purpose IPv6 ranges (RFC 6890 registry).
+// Trusted-host only: RFC 2544 benchmark space used by aTrust/EasyConnect-class VPNs to map
+// public SaaS hostnames into locally routed addresses.
+const vpnMappedIpv4Cidrs: Array<[number, number]> = [[ipv4ToNumber("198.18.0.0"), 15]];
+// Always blocked: unspecified/loopback (::, ::1), link-local (fe80::/10), AWS IMDSv2 IPv6
+// (fd00:ec2::254), multicast (ff00::/8), plus discard, documentation, benchmark, and other
+// special-purpose IPv6 ranges (RFC 6890 registry).
 const reservedIpv6Cidrs: Array<[Uint8Array, number]> = [
   [ipv6ToBytes("::"), 128],
   [ipv6ToBytes("::1"), 128],
@@ -182,6 +193,7 @@ const reservedIpv6Cidrs: Array<[Uint8Array, number]> = [
   [ipv6ToBytes("2001:db8::"), 32],
   [ipv6ToBytes("3fff::"), 20],
   [ipv6ToBytes("5f00::"), 16],
+  [ipv6ToBytes("fd00:ec2::254"), 128],
   [ipv6ToBytes("fe80::"), 10],
   [ipv6ToBytes("ff00::"), 8],
 ];
@@ -239,6 +251,71 @@ export function parsePrivateNetworkAccessFlag(value: string | undefined): boolea
 }
 
 /**
+ * Hosts whose DNS-resolved addresses may use private or VPN-mapped ranges.
+ *
+ * Zero-trust corporate VPNs (aTrust / EasyConnect class) resolve public SaaS
+ * domains into a reserved range — commonly `198.18.0.0/15` — and tunnel the
+ * traffic from there, so on those networks a reserved address is the normal
+ * path to the real service rather than an SSRF target. Reserved ranges are
+ * checked unconditionally, so {@link isPrivateNetworkAccessAllowed} cannot open
+ * them, and there is otherwise no way for an operator to say "this host is
+ * reachable through my VPN". Loopback, link-local, cloud-metadata, multicast,
+ * and other unsafe special-use ranges remain blocked. Empty by default.
+ */
+let egressTrustedHosts: readonly string[] = [];
+
+/**
+ * Configure the hosts that may resolve through private or VPN-mapped ranges
+ * (called once at deployment bootstrap).
+ */
+export function setEgressTrustedHosts(hosts: readonly string[]): void {
+  egressTrustedHosts = hosts;
+}
+
+/**
+ * Whether `hostname` may resolve through private or VPN-mapped ranges.
+ *
+ * An entry starting with `.` matches that domain and its subdomains
+ * (`.feishu.cn` covers `feishu.cn` and `open.feishu.cn`); any other entry must
+ * match the host exactly. Only affects addresses a hostname resolves to — a URL
+ * whose host is already a literal private or reserved IP is rejected earlier by
+ * {@link assertPublicHttpUrl} and this list does not reach it.
+ */
+export function isEgressTrustedHost(hostname: string): boolean {
+  if (egressTrustedHosts.length === 0) {
+    return false;
+  }
+  const host = normalizeTrustedHostEntry(hostname);
+  if (host.length === 0) {
+    return false;
+  }
+  return egressTrustedHosts.some((entry) =>
+    entry.startsWith(".") ? host === entry.slice(1) || host.endsWith(entry) : host === entry,
+  );
+}
+
+/**
+ * Parse the `OOMOL_CONNECT_EGRESS_TRUSTED_HOSTS` flag: a comma-separated
+ * host list, e.g. `".feishu.cn,.larksuite.com,api.example.com"`. Blank entries
+ * are dropped so a trailing comma cannot produce an entry that matches nothing
+ * (or, worse, everything).
+ */
+export function parseEgressTrustedHosts(value: string | undefined): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map(normalizeTrustedHostEntry)
+    .filter((entry) => entry.length > 0 && entry !== ".");
+}
+
+/** Lowercase, trim, and drop a fully-qualified trailing dot so entries and hosts compare equal. */
+function normalizeTrustedHostEntry(value: string): string {
+  return value.trim().toLowerCase().replace(/\.$/, "");
+}
+
+/**
  * Parse a user-supplied URL and reject unsafe network targets.
  *
  * This is a local runtime SSRF guard for provider actions that fetch remote
@@ -270,7 +347,7 @@ export function assertPublicHttpUrl(value: string, options: PublicHttpUrlOptions
   }
 
   const ipv4 = parseIpv4(hostname);
-  if (ipv4 !== undefined && isBlockedIpv4(ipv4, options.allowPrivateNetwork === true)) {
+  if (ipv4 !== undefined && isAddressClassBlocked(classifyIpv4(ipv4), options.allowPrivateNetwork === true)) {
     throw options.createError(`${options.fieldName} must not target private or reserved IP addresses`);
   }
 
@@ -284,41 +361,52 @@ export function assertPublicHttpUrl(value: string, options: PublicHttpUrlOptions
   return url;
 }
 
+export type IpAddressClass = "public" | "private" | "vpn-mapped" | "always-blocked";
+
 /**
- * Return whether a resolved IP address (IPv4 or IPv6 text form) is a private,
- * reserved, loopback, link-local, or metadata target that provider egress must
- * not reach.
+ * Classify one resolved IPv4 or IPv6 address for the shared egress policy.
  *
- * This complements {@link assertPublicHttpUrl}: the URL guard validates literal
- * hostnames before a request, while this check validates the addresses a
- * hostname actually resolves to (closing name→private-IP bypasses). IPv6
- * ranges that embed an IPv4 address (v4-mapped, NAT64, 6to4) are checked
- * against the IPv4 policy. Unparseable input is treated as blocked.
+ * IPv6 ranges that embed an IPv4 address (v4-mapped, NAT64, 6to4, Teredo)
+ * inherit the embedded IPv4 classification. Unparseable input fails closed.
  */
-export function isBlockedIpAddress(address: string, allowPrivateNetwork = false): boolean {
+export function classifyIpAddress(address: string): IpAddressClass {
   const ipv4 = parseIpv4(address);
   if (ipv4 !== undefined) {
-    return isBlockedIpv4(ipv4, allowPrivateNetwork);
+    return classifyIpv4(ipv4);
   }
 
   const ipv6 = parseIpv6(address);
   if (ipv6 === undefined) {
-    return true;
+    return "always-blocked";
   }
   if (reservedIpv6Cidrs.some(([network, bits]) => ipv6InCidr(ipv6, network, bits))) {
-    return true;
+    return "always-blocked";
   }
-  if (!allowPrivateNetwork && privateIpv6Cidrs.some(([network, bits]) => ipv6InCidr(ipv6, network, bits))) {
-    return true;
+  if (privateIpv6Cidrs.some(([network, bits]) => ipv6InCidr(ipv6, network, bits))) {
+    return "private";
   }
   for (const [network, bits, offset] of ipv4EmbeddedIpv6Cidrs) {
     if (ipv6InCidr(ipv6, network, bits)) {
-      const embedded =
-        ((ipv6[offset]! << 24) | (ipv6[offset + 1]! << 16) | (ipv6[offset + 2]! << 8) | ipv6[offset + 3]!) >>> 0;
-      return isBlockedIpv4(embedded, allowPrivateNetwork);
+      return classifyIpv4(readIpv4At(ipv6, offset));
     }
   }
-  return false;
+  const teredo = classifyTeredoIpv6(ipv6);
+  if (teredo !== undefined) {
+    return teredo;
+  }
+  return "public";
+}
+
+/**
+ * Return whether a resolved IP address is blocked by the default egress policy.
+ *
+ * This complements {@link assertPublicHttpUrl}: the URL guard validates literal
+ * hostnames before a request, while this check validates the addresses a
+ * hostname actually resolves to. Private addresses may be enabled explicitly;
+ * VPN-mapped and always-blocked ranges remain closed here.
+ */
+export function isBlockedIpAddress(address: string, allowPrivateNetwork = false): boolean {
+  return isAddressClassBlocked(classifyIpAddress(address), allowPrivateNetwork);
 }
 
 /**
@@ -343,11 +431,52 @@ export function isIpAddress(value: string): boolean {
   return parseIpv4(value) !== undefined || parseIpv6(value) !== undefined;
 }
 
-function isBlockedIpv4(value: number, allowPrivateNetwork: boolean): boolean {
-  if (reservedIpv4Cidrs.some(([network, bits]) => ipv4InCidr(value, network, bits))) {
-    return true;
+function readIpv4At(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset]! << 24) | (bytes[offset + 1]! << 16) | (bytes[offset + 2]! << 8) | bytes[offset + 3]!) >>> 0;
+}
+
+/**
+ * Teredo (RFC 4380, `2001:0000::/32`) embeds a server IPv4 and an obfuscated
+ * client IPv4 (last 32 bits XOR `0xffffffff`). Classify as the stricter of the
+ * two so a crafted Teredo address cannot hide IMDS or RFC 1918 behind a public
+ * 6-in-4 prefix.
+ */
+function classifyTeredoIpv6(ipv6: Uint8Array): IpAddressClass | undefined {
+  if (ipv6[0] !== 0x20 || ipv6[1] !== 0x01 || ipv6[2] !== 0x00 || ipv6[3] !== 0x00) {
+    return undefined;
   }
-  return !allowPrivateNetwork && privateIpv4Cidrs.some(([network, bits]) => ipv4InCidr(value, network, bits));
+  return stricterIpAddressClass(classifyIpv4(readIpv4At(ipv6, 4)), classifyIpv4(readIpv4At(ipv6, 12) ^ 0xffffffff));
+}
+
+function stricterIpAddressClass(left: IpAddressClass, right: IpAddressClass): IpAddressClass {
+  const rank: Record<IpAddressClass, number> = {
+    public: 0,
+    private: 1,
+    "vpn-mapped": 2,
+    "always-blocked": 3,
+  };
+  return rank[left] >= rank[right] ? left : right;
+}
+
+function classifyIpv4(value: number): IpAddressClass {
+  if (reservedIpv4Cidrs.some(([network, bits]) => ipv4InCidr(value, network, bits))) {
+    return "always-blocked";
+  }
+  if (vpnMappedIpv4Cidrs.some(([network, bits]) => ipv4InCidr(value, network, bits))) {
+    return "vpn-mapped";
+  }
+  if (privateIpv4Cidrs.some(([network, bits]) => ipv4InCidr(value, network, bits))) {
+    return "private";
+  }
+  return "public";
+}
+
+function isAddressClassBlocked(addressClass: IpAddressClass, allowPrivateNetwork: boolean): boolean {
+  return (
+    addressClass === "always-blocked" ||
+    addressClass === "vpn-mapped" ||
+    (!allowPrivateNetwork && addressClass === "private")
+  );
 }
 
 function normalizeHostname(value: string): string {

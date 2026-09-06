@@ -1,10 +1,16 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { HereActionName } from "./actions.ts";
 
-import { optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import { jsonObject } from "../../core/request.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  ProviderRequestError,
+  providerUserAgent,
+  requiredInputString,
+} from "../provider-runtime.ts";
 
 const service = "here";
 const hereGeocodeBaseUrl = "https://geocode.search.hereapi.com/v1";
@@ -18,11 +24,11 @@ type HereRequestPhase = "validate" | "execute";
 type HereActionContext = Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">;
 type HereActionHandler = (input: Record<string, unknown>, context: HereActionContext) => Promise<unknown>;
 
-export const hereActionHandlers: Record<HereActionName, HereActionHandler> = {
+export const hereActionHandlers: ProviderActionHandlers<"here", HereActionHandler> = {
   geocode(input, context) {
     return hereGetJson(
       buildHereUrl(hereGeocodeBaseUrl, "/geocode", context.apiKey, {
-        q: readRequiredHereString(input.q, "q"),
+        q: requiredInputString(input.q, "q"),
         lang: optionalString(input.lang),
         limit: optionalInteger(input.limit),
         in: optionalString(input.in),
@@ -38,7 +44,7 @@ export const hereActionHandlers: Record<HereActionName, HereActionHandler> = {
   reverse_geocode(input, context) {
     return hereGetJson(
       buildHereUrl(hereReverseGeocodeBaseUrl, "/revgeocode", context.apiKey, {
-        at: readRequiredHereString(input.at, "at"),
+        at: requiredInputString(input.at, "at"),
         lang: optionalString(input.lang),
         limit: optionalInteger(input.limit),
         types: optionalString(input.types),
@@ -53,7 +59,7 @@ export const hereActionHandlers: Record<HereActionName, HereActionHandler> = {
     assertValidHereSpatialContext(input, "HERE Discover");
     return hereGetJson(
       buildHereUrl(hereDiscoverBaseUrl, "/discover", context.apiKey, {
-        q: readRequiredHereString(input.q, "q"),
+        q: requiredInputString(input.q, "q"),
         at: optionalString(input.at),
         in: optionalString(input.in),
         lang: optionalString(input.lang),
@@ -70,7 +76,7 @@ export const hereActionHandlers: Record<HereActionName, HereActionHandler> = {
     assertValidHereSpatialContext(input, "HERE Autosuggest");
     return hereGetJson(
       buildHereUrl(hereAutosuggestBaseUrl, "/autosuggest", context.apiKey, {
-        q: readRequiredHereString(input.q, "q"),
+        q: requiredInputString(input.q, "q"),
         at: optionalString(input.at),
         in: optionalString(input.in),
         lang: optionalString(input.lang),
@@ -84,7 +90,7 @@ export const hereActionHandlers: Record<HereActionName, HereActionHandler> = {
   autocomplete(input, context) {
     return hereGetJson(
       buildHereUrl(hereAutocompleteBaseUrl, "/autocomplete", context.apiKey, {
-        q: readRequiredHereString(input.q, "q"),
+        q: requiredInputString(input.q, "q"),
         at: optionalString(input.at),
         in: optionalString(input.in),
         lang: optionalString(input.lang),
@@ -98,7 +104,7 @@ export const hereActionHandlers: Record<HereActionName, HereActionHandler> = {
   lookup(input, context) {
     return hereGetJson(
       buildHereUrl(hereLookupBaseUrl, "/lookup", context.apiKey, {
-        id: readRequiredHereString(input.id, "id"),
+        id: requiredInputString(input.id, "id"),
         lang: optionalString(input.lang),
         show: optionalString(input.show),
       }),
@@ -256,6 +262,8 @@ function assertValidHereSpatialContext(input: Record<string, unknown>, actionNam
   }
 }
 
-function readRequiredHereString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
-}
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://geocode.search.hereapi.com/v1",
+  auth: { type: "api_key_query", name: "apiKey" },
+});

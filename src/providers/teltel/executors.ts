@@ -1,6 +1,11 @@
-import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type {
+  CredentialValidationResult,
+  CredentialValidators,
+  ProviderExecutors,
+  ProviderProxyExecutor,
+} from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { TeltelActionName } from "./actions.ts";
 
 import {
   compactObject,
@@ -8,9 +13,13 @@ import {
   optionalRecord,
   optionalString,
   optionalStringOrNull,
-  requiredString,
 } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  ProviderRequestError,
+  requiredInputString,
+} from "../provider-runtime.ts";
 
 const service = "teltel";
 const teltelApiBaseUrl = "https://api.teltel.io/v2";
@@ -50,7 +59,7 @@ interface TeltelSmsReportPayload {
   error_msg?: unknown;
 }
 
-export const teltelActionHandlers: Record<TeltelActionName, TeltelActionHandler> = {
+export const teltelActionHandlers: ProviderActionHandlers<"teltel", TeltelActionHandler> = {
   async get_account_balance(_input, context): Promise<unknown> {
     return getTeltelAccountBalance(context);
   },
@@ -61,9 +70,9 @@ export const teltelActionHandlers: Record<TeltelActionName, TeltelActionHandler>
       apiKey: context.apiKey,
       body: {
         data: compactObject({
-          from: requiredProviderString(input.from, "from"),
-          to: requiredProviderString(input.to, "to"),
-          message: requiredProviderString(input.message, "message"),
+          from: requiredInputString(input.from, "from"),
+          to: requiredInputString(input.to, "to"),
+          message: requiredInputString(input.message, "message"),
           callback: input.callback,
         }),
       },
@@ -92,7 +101,7 @@ export const teltelActionHandlers: Record<TeltelActionName, TeltelActionHandler>
     return { reports: reports.map((report) => normalizeTeltelSmsReport(report)) };
   },
   async get_sms_report(input, context): Promise<unknown> {
-    const messageId = requiredProviderString(input.messageId, "messageId");
+    const messageId = requiredInputString(input.messageId, "messageId");
     const payload = await teltelRequest<TeltelSmsReportPayload>({
       path: `/sms/reports/${encodeURIComponent(messageId)}`,
       apiKey: context.apiKey,
@@ -268,10 +277,6 @@ function normalizeTeltelSmsReport(payload: TeltelSmsReportPayload): Record<strin
   };
 }
 
-function requiredProviderString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
-}
-
 function requiredProviderNumber(value: unknown, fieldName: string): number {
   const parsed = optionalNumber(value);
   if (parsed === undefined) {
@@ -288,3 +293,9 @@ function nullableInteger(value: unknown): number | null {
   const parsed = nullableNumber(value);
   return parsed === null ? null : Number.isInteger(parsed) ? parsed : null;
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://api.teltel.io/v2",
+  auth: { type: "api_key_header", name: "x-api-key" },
+});

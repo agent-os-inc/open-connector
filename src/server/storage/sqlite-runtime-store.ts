@@ -1,6 +1,11 @@
 import type { IConnectionStore, StoredConnection } from "../../connection-service.ts";
 import type { TokenPolicy } from "../../core/action-policy.ts";
 import type { ResolvedCredential, RuntimeLogger } from "../../core/types.ts";
+import type {
+  IMarketplaceStore,
+  ProviderPreference,
+  StoredMarketplaceConfig,
+} from "../../marketplace/marketplace-service.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../../oauth/oauth-client-config-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../../oauth/oauth-flow-service.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
@@ -10,25 +15,34 @@ import type {
   IdempotencyClaimResult,
   IIdempotencyStore,
 } from "./idempotency-store.ts";
+import type { MigrationSource } from "./migration-source.ts";
 import type { RuntimeDatabase } from "./runtime-database.ts";
 import type { IRuntimePolicyStore, RuntimePolicyRecord } from "./runtime-policy-store.ts";
 import type { IRunLogStore, RunLog, RunLogListInput, RunLogPage, RunLogWriteResult } from "./runtime-store.ts";
 import type { IRuntimeTokenStore, RuntimeTokenRecord } from "./runtime-token-service.ts";
 
-import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { parseRuntimeActionHttpResult } from "../api/runtime-api.ts";
 import { PlainTextSecretCodec } from "../secrets/secret-codec-core.ts";
-import { DEFAULT_RUN_LIMIT, decodeRunLogCursor, encodeRunLogCursor } from "./runtime-store.ts";
+import { defaultMigrationSource } from "./migration-source.ts";
+import {
+  listRunLogs,
+  parseJson,
+  readRunLogRow,
+  readRuntimePolicyRow,
+  readRuntimeTokenRow,
+  readString,
+  runtimeTokenColumns,
+} from "./runtime-sql.ts";
+import { DEFAULT_RUN_LIMIT } from "./runtime-store.ts";
 
-type RuntimeRow = Record<string, unknown>;
 type SecretJsonTable = "oauth_client_configs";
-const migrationDirectory = new URL("../../../migrations/", import.meta.url);
 
 export interface SqliteRuntimeDatabaseOptions {
   logger?: RuntimeLogger;
   runLimit?: number;
   secretCodec?: ISecretCodec;
+  migrations?: MigrationSource;
 }
 
 interface SecretJsonInput {
@@ -58,6 +72,11 @@ interface RotatedIdempotencySecret {
   value: string;
 }
 
+interface RotatedStateSecret {
+  state: string;
+  value: string;
+}
+
 /**
  * Shared SQLite connection for local runtime state.
  */
@@ -69,6 +88,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
   readonly runtimePolicyStore: SqliteRuntimePolicyStore;
   readonly runLogStore: SqliteRunLogStore;
   readonly idempotencyStore: SqliteIdempotencyStore;
+  readonly marketplaceStore: SqliteMarketplaceStore;
 
   private readonly database: DatabaseSync;
   private readonly secretCodec: ISecretCodec;
@@ -76,14 +96,15 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
   constructor(filename: string, options: SqliteRuntimeDatabaseOptions = {}) {
     this.database = new DatabaseSync(filename);
     this.secretCodec = options.secretCodec ?? new PlainTextSecretCodec();
-    this.initialize(options.logger);
+    this.initialize(options.migrations ?? defaultMigrationSource, options.logger);
     this.connectionStore = new SqliteConnectionStore(this.database, this.secretCodec);
     this.oauthClientConfigStore = new SqliteOAuthClientConfigStore(this.database, this.secretCodec);
-    this.oauthStateStore = new SqliteOAuthStateStore(this.database);
+    this.oauthStateStore = new SqliteOAuthStateStore(this.database, this.secretCodec);
     this.runtimeTokenStore = new SqliteRuntimeTokenStore(this.database);
     this.runtimePolicyStore = new SqliteRuntimePolicyStore(this.database);
     this.runLogStore = new SqliteRunLogStore(this.database, options.runLimit ?? DEFAULT_RUN_LIMIT);
     this.idempotencyStore = new SqliteIdempotencyStore(this.database, this.secretCodec);
+    this.marketplaceStore = new SqliteMarketplaceStore(this.database);
   }
 
   close(): void {
@@ -98,11 +119,27 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       nextSecretCodec,
       "oauth_client_configs",
     );
+    const oauthStates = await readRotatedStateSecrets(this.database, this.secretCodec, nextSecretCodec);
     const idempotencyResponses = await readRotatedIdempotencySecrets(this.database, this.secretCodec, nextSecretCodec);
+    const marketplaceConfig = await this.marketplaceStore.getConfig();
+    const rotatedMarketplaceConfig = marketplaceConfig
+      ? {
+          ...marketplaceConfig,
+          apiKeyEncrypted: await nextSecretCodec.encode(
+            await this.secretCodec.decode(marketplaceConfig.apiKeyEncrypted),
+          ),
+        }
+      : undefined;
     runInTransaction(this.database, () => {
       writeRotatedConnectionSecrets(this.database, connections);
       writeRotatedServiceSecrets(this.database, "oauth_client_configs", oauthConfigs);
+      writeRotatedStateSecrets(this.database, oauthStates);
       writeRotatedIdempotencySecrets(this.database, idempotencyResponses);
+      if (rotatedMarketplaceConfig) {
+        this.database
+          .prepare("update marketplace_config set value = ? where id = 1")
+          .run(JSON.stringify(rotatedMarketplaceConfig));
+      }
     });
   }
 
@@ -115,12 +152,59 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       delete from runtime_policy;
       delete from runs;
       delete from idempotency_records;
+      delete from marketplace_config;
+      delete from provider_preferences;
     `);
   }
 
-  private initialize(logger?: RuntimeLogger): void {
+  private initialize(migrations: MigrationSource, logger?: RuntimeLogger): void {
     this.database.exec("pragma journal_mode = wal;");
-    runSqliteMigrations(this.database, logger);
+    runSqliteMigrations(this.database, migrations, logger);
+  }
+}
+
+export class SqliteMarketplaceStore implements IMarketplaceStore {
+  private readonly database: DatabaseSync;
+
+  constructor(database: DatabaseSync) {
+    this.database = database;
+  }
+
+  async getConfig(): Promise<StoredMarketplaceConfig | undefined> {
+    const row = this.database.prepare("select value from marketplace_config where id = 1").get();
+    return row ? parseJson<StoredMarketplaceConfig>(readString(row, "value")) : undefined;
+  }
+
+  async setConfig(config: StoredMarketplaceConfig): Promise<void> {
+    this.database
+      .prepare(
+        "insert into marketplace_config (id, value) values (1, ?) on conflict(id) do update set value = excluded.value",
+      )
+      .run(JSON.stringify(config));
+  }
+
+  async deleteConfig(): Promise<void> {
+    this.database.prepare("delete from marketplace_config where id = 1").run();
+  }
+
+  async listProviderPreferences(): Promise<ProviderPreference[]> {
+    return this.database
+      .prepare("select service, enabled, created_at, updated_at from provider_preferences order by service")
+      .all()
+      .map((row) => ({
+        service: readString(row, "service"),
+        enabled: row.enabled === 1,
+        createdAt: readString(row, "created_at"),
+        updatedAt: readString(row, "updated_at"),
+      }));
+  }
+
+  async setProviderPreference(preference: ProviderPreference): Promise<void> {
+    this.database
+      .prepare(
+        "insert into provider_preferences (service, enabled, created_at, updated_at) values (?, ?, ?, ?) on conflict(service) do update set enabled = excluded.enabled, updated_at = excluded.updated_at",
+      )
+      .run(preference.service, preference.enabled ? 1 : 0, preference.createdAt, preference.updatedAt);
   }
 }
 
@@ -169,6 +253,9 @@ export class SqliteConnectionStore implements IConnectionStore {
         await this.secretCodec.encode(JSON.stringify(credential)),
         new Date().toISOString(),
       );
+    if (!row) {
+      throw new Error("Connection upsert did not return the stored row.");
+    }
     return {
       id: readString(row, "id"),
       revision: readString(row, "revision"),
@@ -306,9 +393,15 @@ export class SqliteOAuthClientConfigStore implements IOAuthClientConfigStore {
 
 export class SqliteOAuthStateStore implements IOAuthStateStore {
   private readonly database: DatabaseSync;
+  private readonly secretCodec: ISecretCodec;
 
-  constructor(database: DatabaseSync) {
+  constructor(database: DatabaseSync, secretCodec: ISecretCodec) {
     this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async deleteCreatedBefore(cutoff: string): Promise<void> {
+    this.database.prepare("delete from oauth_states where created_at < ?").run(cutoff);
   }
 
   async set(state: OAuthAuthorizationState): Promise<void> {
@@ -320,13 +413,15 @@ export class SqliteOAuthStateStore implements IOAuthStateStore {
         on conflict(state) do update set value = excluded.value, created_at = excluded.created_at
       `,
       )
-      .run(state.state, JSON.stringify(state), state.createdAt);
+      .run(state.state, await this.secretCodec.encode(JSON.stringify(state)), state.createdAt);
   }
 
   async take(state: string): Promise<OAuthAuthorizationState | undefined> {
-    const pending = getJson<OAuthAuthorizationState>(this.database, "oauth_states", "state", state);
+    const row = this.database.prepare("select value from oauth_states where state = ?").get(state);
     this.database.prepare("delete from oauth_states where state = ?").run(state);
-    return pending;
+    return row
+      ? parseJson<OAuthAuthorizationState>(await this.secretCodec.decode(readString(row, "value")))
+      : undefined;
   }
 }
 
@@ -342,9 +437,9 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
       .prepare(
         `
         insert into runtime_tokens (
-          id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at
+          ${runtimeTokenColumns}
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       )
       .run(
@@ -354,6 +449,7 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
         JSON.stringify(record.allowedActions),
         JSON.stringify(record.blockedActions),
         JSON.stringify(record.allowedProxies),
+        JSON.stringify(record.allowedConnections ?? []),
         record.createdAt,
         record.lastUsedAt ?? null,
       );
@@ -363,9 +459,8 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
     return this.database
       .prepare(
         `
-        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at
+        select ${runtimeTokenColumns}
         from runtime_tokens
-        where revoked_at is null
         order by created_at desc, id desc
       `,
       )
@@ -377,9 +472,9 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
     const row = this.database
       .prepare(
         `
-        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at
+        select ${runtimeTokenColumns}
         from runtime_tokens
-        where token_hash = ? and revoked_at is null
+        where token_hash = ?
       `,
       )
       .get(tokenHash);
@@ -391,15 +486,16 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
       .prepare(
         `
         update runtime_tokens
-        set allowed_actions = ?, blocked_actions = ?, allowed_proxies = ?
-        where id = ? and revoked_at is null
-        returning id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at
+        set allowed_actions = ?, blocked_actions = ?, allowed_proxies = ?, allowed_connections = ?
+        where id = ?
+        returning ${runtimeTokenColumns}
       `,
       )
       .get(
         JSON.stringify(policy.allowedActions),
         JSON.stringify(policy.blockedActions),
         JSON.stringify(policy.allowedProxies),
+        JSON.stringify(policy.allowedConnections ?? []),
         id,
       );
     return row ? readRuntimeTokenRow(row) : undefined;
@@ -411,23 +507,8 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
   }
 
   async markUsed(id: string, usedAt: string): Promise<void> {
-    this.database
-      .prepare("update runtime_tokens set last_used_at = ? where id = ? and revoked_at is null")
-      .run(usedAt, id);
+    this.database.prepare("update runtime_tokens set last_used_at = ? where id = ?").run(usedAt, id);
   }
-}
-
-function readRuntimeTokenRow(row: unknown): RuntimeTokenRecord {
-  return {
-    id: readString(row, "id"),
-    name: readString(row, "name"),
-    tokenHash: readString(row, "token_hash"),
-    allowedActions: parseJson(readString(row, "allowed_actions")),
-    blockedActions: parseJson(readString(row, "blocked_actions")),
-    allowedProxies: parseJson(readString(row, "allowed_proxies")),
-    createdAt: readString(row, "created_at"),
-    lastUsedAt: readOptionalString(row, "last_used_at"),
-  };
 }
 
 export class SqliteRuntimePolicyStore implements IRuntimePolicyStore {
@@ -439,12 +520,7 @@ export class SqliteRuntimePolicyStore implements IRuntimePolicyStore {
 
   async get(): Promise<RuntimePolicyRecord | undefined> {
     const row = this.database.prepare("select value, updated_at from runtime_policy where id = 1").get();
-    return row
-      ? {
-          rules: parseJson(readString(row, "value")),
-          updatedAt: readString(row, "updated_at"),
-        }
-      : undefined;
+    return row ? readRuntimePolicyRow(row) : undefined;
   }
 
   async set(record: RuntimePolicyRecord): Promise<void> {
@@ -496,7 +572,10 @@ export class SqliteIdempotencyStore implements IIdempotencyStore {
           where key_hash = ?
         `,
         )
-        .get(input.keyHash) as RuntimeRow;
+        .get(input.keyHash);
+      if (!row) {
+        throw new Error("Idempotency record disappeared while claiming it.");
+      }
       return { kind: "existing", row } as const;
     });
 
@@ -573,41 +652,12 @@ export class SqliteRunLogStore implements IRunLogStore {
   }
 
   async list(input: RunLogListInput = {}): Promise<RunLogPage> {
-    const limit = Math.max(1, Math.min(input.limit ?? this.limit, this.limit));
-    const cursor = decodeRunLogCursor(input.cursor);
-    const conditions: string[] = [];
-    const values: Array<string | number> = [];
-    if (cursor) {
-      conditions.push("(started_at < ? or (started_at = ? and id < ?))");
-      values.push(cursor.startedAt, cursor.startedAt, cursor.id);
-    }
-    if (input.service) {
-      conditions.push("service = ?");
-      values.push(input.service);
-    }
-    if (input.actionId) {
-      conditions.push("action_id = ?");
-      values.push(input.actionId);
-    }
-    if (input.caller) {
-      conditions.push("caller = ?");
-      values.push(input.caller);
-    }
-    if (input.ok !== undefined) {
-      conditions.push("ok = ?");
-      values.push(input.ok ? 1 : 0);
-    }
-    const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
-    const rows = this.database
-      .prepare(`select service, value from runs ${where} order by started_at desc, id desc limit ?`)
-      .all(...values, limit + 1);
-    const runs = rows.map(readRunLogRow);
-    const items = runs.slice(0, limit);
-
-    return {
-      items,
-      nextCursor: runs.length > limit && items.length > 0 ? encodeRunLogCursor(items[items.length - 1]) : undefined,
-    };
+    return listRunLogs(
+      input,
+      this.limit,
+      () => "?",
+      (sql, values) => this.database.prepare(sql).all(...values),
+    );
   }
 }
 
@@ -639,12 +689,7 @@ function insertRun(database: DatabaseSync, run: RunLog): void {
     );
 }
 
-function readRunLogRow(row: unknown): RunLog {
-  const run = parseJson<RunLog>(readString(row, "value"));
-  return { ...run, service: readString(row, "service") };
-}
-
-function runSqliteMigrations(database: DatabaseSync, logger?: RuntimeLogger): void {
+function runSqliteMigrations(database: DatabaseSync, migrations: MigrationSource, logger?: RuntimeLogger): void {
   const startedAt = Date.now();
   database.exec(`
     create table if not exists runtime_migrations (
@@ -658,42 +703,42 @@ function runSqliteMigrations(database: DatabaseSync, logger?: RuntimeLogger): vo
       .all()
       .map((row) => readString(row, "name")),
   );
-  const migrationFiles = readdirSync(migrationDirectory)
-    .filter((name) => /^\d+_.*\.sql$/.test(name))
-    .sort();
+  const migrationFiles = migrations.readMigrations("sqlite");
   let newlyAppliedCount = 0;
 
-  for (const file of migrationFiles) {
-    if (applied.has(file)) {
+  for (const migration of migrationFiles) {
+    if (applied.has(migration.name)) {
       continue;
     }
 
     const migrationStartedAt = Date.now();
-    logger?.info({ migration: file }, "sqlite migration started");
+    logger?.info({ migration: migration.name }, "sqlite migration started");
     try {
-      const sql = readFileSync(new URL(file, migrationDirectory), "utf8");
       runInTransaction(database, () => {
-        database.exec(sql);
+        database.exec(migration.sql);
         database
           .prepare("insert into runtime_migrations (name, applied_at) values (?, ?)")
-          .run(file, new Date().toISOString());
+          .run(migration.name, new Date().toISOString());
       });
     } catch (error) {
       logger?.error(
-        { migration: file, durationMs: Date.now() - migrationStartedAt, err: error },
+        { migration: migration.name, durationMs: Date.now() - migrationStartedAt, err: error },
         "sqlite migration failed",
       );
       throw error;
     }
-    applied.add(file);
+    applied.add(migration.name);
     newlyAppliedCount += 1;
-    logger?.info({ migration: file, durationMs: Date.now() - migrationStartedAt }, "sqlite migration completed");
+    logger?.info(
+      { migration: migration.name, durationMs: Date.now() - migrationStartedAt },
+      "sqlite migration completed",
+    );
   }
 
   logger?.info(
     {
       migrationCount: migrationFiles.length,
-      appliedCount: migrationFiles.filter((file) => applied.has(file)).length,
+      appliedCount: migrationFiles.filter((migration) => applied.has(migration.name)).length,
       newlyAppliedCount,
       durationMs: Date.now() - startedAt,
     },
@@ -749,6 +794,27 @@ function writeRotatedServiceSecrets(
   }
 }
 
+async function readRotatedStateSecrets(
+  database: DatabaseSync,
+  currentCodec: ISecretCodec,
+  nextCodec: ISecretCodec,
+): Promise<RotatedStateSecret[]> {
+  const rows = database.prepare("select state, value from oauth_states").all();
+  return await Promise.all(
+    rows.map(async (row) => ({
+      state: readString(row, "state"),
+      value: await nextCodec.encode(await currentCodec.decode(readString(row, "value"))),
+    })),
+  );
+}
+
+function writeRotatedStateSecrets(database: DatabaseSync, states: RotatedStateSecret[]): void {
+  const statement = database.prepare("update oauth_states set value = ? where state = ?");
+  for (const state of states) {
+    statement.run(state.value, state.state);
+  }
+}
+
 async function readRotatedIdempotencySecrets(
   database: DatabaseSync,
   currentCodec: ISecretCodec,
@@ -784,11 +850,6 @@ function runInTransaction<T>(database: DatabaseSync, work: () => T): T {
   }
 }
 
-function getJson<T>(database: DatabaseSync, table: "oauth_states", keyColumn: "state", key: string): T | undefined {
-  const row = database.prepare(`select value from ${table} where ${keyColumn} = ?`).get(key) as RuntimeRow | undefined;
-  return row ? parseJson<T>(readString(row, "value")) : undefined;
-}
-
 async function getSecretJson<T>(input: SecretJsonInput): Promise<T | undefined> {
   const stored = getStoredValue(input.database, input.table, "service", input.service);
   return stored ? parseJson<T>(await input.secretCodec.decode(stored)) : undefined;
@@ -800,7 +861,7 @@ function getStoredValue(
   keyColumn: "service",
   key: string,
 ): string | undefined {
-  const row = database.prepare(`select value from ${table} where ${keyColumn} = ?`).get(key) as RuntimeRow | undefined;
+  const row = database.prepare(`select value from ${table} where ${keyColumn} = ?`).get(key);
   return row ? readString(row, "value") : undefined;
 }
 
@@ -814,37 +875,4 @@ async function setServiceJson(input: SetServiceJsonInput): Promise<void> {
     `,
     )
     .run(input.service, await input.secretCodec.encode(JSON.stringify(input.value)), new Date().toISOString());
-}
-
-function readString(row: unknown, key: string): string {
-  if (typeof row !== "object" || row == null) {
-    throw new Error(`Expected SQLite row for ${key}.`);
-  }
-
-  const value = (row as Record<string, unknown>)[key];
-  if (typeof value !== "string") {
-    throw new Error(`Expected SQLite column ${key} to be a string.`);
-  }
-
-  return value;
-}
-
-function readOptionalString(row: unknown, key: string): string | undefined {
-  if (typeof row !== "object" || row == null) {
-    throw new Error(`Expected SQLite row for ${key}.`);
-  }
-
-  const value = (row as Record<string, unknown>)[key];
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error(`Expected SQLite column ${key} to be a string.`);
-  }
-
-  return value;
-}
-
-function parseJson<T>(value: string): T {
-  return JSON.parse(value) as T;
 }

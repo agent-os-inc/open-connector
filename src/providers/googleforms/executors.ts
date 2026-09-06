@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { OAuthProviderContext } from "../provider-runtime.ts";
-import type { GoogleFormsActionName } from "./actions.ts";
 
 import {
   compactObject,
@@ -10,8 +10,8 @@ import {
   optionalRecord,
   optionalString,
 } from "../../core/cast.ts";
-import { googleJsonRequest } from "../googledrive/runtime-shared.ts";
-import { defineOAuthProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
+import { googleJsonRequest } from "../google-runtime.ts";
+import { defineOAuthProviderExecutors, providerInputError, ProviderRequestError } from "../provider-runtime.ts";
 
 export const googleFormsApiBaseUrl = "https://forms.googleapis.com/v1/forms";
 
@@ -77,7 +77,7 @@ interface ListResponsesPayload {
   nextPageToken?: string | null;
 }
 
-export const googleFormsActionHandlers: Record<GoogleFormsActionName, GoogleFormsActionHandler> = {
+export const googleFormsActionHandlers: ProviderActionHandlers<"googleforms", GoogleFormsActionHandler> = {
   create_form: createForm,
   get_form: getForm,
   batch_update_form: batchUpdateForm,
@@ -179,7 +179,7 @@ async function getForm(input: Record<string, unknown>, context: GoogleFormsRunti
 
 async function batchUpdateForm(input: Record<string, unknown>, context: GoogleFormsRuntimeContext) {
   const formId = requireString(input.formId, "formId is required");
-  const requests = objectArray(input.requests, "requests", providerRequestError);
+  const requests = objectArray(input.requests, "requests", providerInputError);
   const includeFormInResponse = input.includeFormInResponse === true;
 
   const payload = await googleFormsJsonRequest<BatchUpdatePayload>(
@@ -520,8 +520,4 @@ function requireBoolean(value: unknown, message: string): boolean {
 function integerQuery(value: unknown): string | undefined {
   const integer = optionalInteger(value);
   return integer !== undefined ? String(integer) : undefined;
-}
-
-function providerRequestError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

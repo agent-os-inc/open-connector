@@ -1,13 +1,15 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ProviderFetch } from "../provider-runtime.ts";
 
 import { createHash } from "node:crypto";
-import { compactObject, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
+  requiredInputString,
 } from "../provider-runtime.ts";
 
 const service = "minimax";
@@ -23,12 +25,12 @@ interface MinimaxActionContext {
 }
 type MinimaxActionHandler = (input: Record<string, unknown>, context: MinimaxActionContext) => Promise<unknown>;
 
-export const minimaxActionHandlers: Record<string, MinimaxActionHandler> = {
+export const minimaxActionHandlers: ProviderActionHandlers<"minimax", MinimaxActionHandler> = {
   list_models(_input, context) {
     return minimaxGetJson("/v1/models", context);
   },
   retrieve_model(input, context) {
-    const modelId = readInputString(input.modelId, "modelId");
+    const modelId = requiredInputString(input.modelId, "modelId");
     return minimaxGetJson(`/v1/models/${encodeURIComponent(modelId)}`, context);
   },
   create_response(input, context) {
@@ -48,23 +50,27 @@ export const minimaxActionHandlers: Record<string, MinimaxActionHandler> = {
     return minimaxPostJson("/v1/video_generation", normalizeMinimaxVideoBody(input), context);
   },
   query_video_generation(input, context) {
-    const taskId = readInputString(input.task_id, "task_id");
+    const taskId = requiredInputString(input.task_id, "task_id");
     return minimaxGetJson(`/v1/query/video_generation?task_id=${encodeURIComponent(taskId)}`, context);
   },
   query_video_generation_v2(input, context) {
-    const taskId = readInputString(input.task_id, "task_id");
+    const taskId = requiredInputString(input.task_id, "task_id");
     return minimaxGetJson(`/v2/query/video_generation/${encodeURIComponent(taskId)}`, context);
   },
   list_video_generation_v2(input, context) {
     return minimaxGetJson(createVideoGenerationV2ListPath(input), context);
   },
   delete_video_generation_v2(input, context) {
-    const taskId = readInputString(input.task_id, "task_id");
+    const taskId = requiredInputString(input.task_id, "task_id");
     return minimaxDeleteJson(`/v2/video_generation/${encodeURIComponent(taskId)}`, context);
   },
   download_video(input, context) {
-    const fileId = readInputString(input.file_id, "file_id");
+    const fileId = requiredInputString(input.file_id, "file_id");
     return minimaxGetJson(`/v1/files/retrieve?file_id=${encodeURIComponent(fileId)}`, context);
+  },
+  text_to_audio(input, context) {
+    assertStreamingDisabled(input);
+    return minimaxPostJson("/v1/t2a_v2", normalizeMinimaxAudioBody(input), context);
   },
 };
 
@@ -232,6 +238,16 @@ function normalizeMinimaxVideoV2Body(input: Record<string, unknown>): Record<str
   });
 }
 
+function normalizeMinimaxAudioBody(input: Record<string, unknown>): Record<string, unknown> {
+  return compactObject({
+    ...input,
+    model: trimString(input.model),
+    text: trimString(input.text),
+    language_boost: trimString(input.language_boost),
+    output_format: trimString(input.output_format),
+  });
+}
+
 function createVideoGenerationV2ListPath(input: Record<string, unknown>): string {
   const search = new URLSearchParams();
   appendQueryValue(search, "page_num", input.page_num);
@@ -288,7 +304,7 @@ function mapMinimaxError(status: number, payload: Record<string, unknown>): Prov
   if (status === 401 || status === 403 || errorCode === "1004" || errorCode === "2049") {
     return new ProviderRequestError(401, message, payload);
   }
-  if (status === 429 || errorCode === "1002" || errorCode === "1008") {
+  if (status === 429 || errorCode === "1002" || errorCode === "1008" || errorCode === "1039") {
     return new ProviderRequestError(429, message, payload);
   }
   if (status >= 400 && status < 500) {
@@ -347,10 +363,6 @@ function assertStreamingDisabled(input: Record<string, unknown>): void {
   if (input.stream === true) {
     throw new ProviderRequestError(400, "stream=true is not supported by connector actions");
   }
-}
-
-function readInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function trimString(value: unknown): string | undefined {

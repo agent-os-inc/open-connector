@@ -5,20 +5,13 @@
     "catalogOnly": "Catalog only",
     "clear": "Clear",
     "close": "Close",
-    "connected": "Connected",
-    "copied": "Copied {{label}}",
-    "copy": "Copy {{label}}",
     "credential": "Credential",
     "currentSelection": "Current selection",
-    "docs": "Docs",
     "failed": "Failed",
     "loadingRuntimeData": "Loading runtime data...",
     "local": "Local",
     "noAuth": "No auth",
-    "notConnected": "Not connected",
-    "open": "Open",
     "refresh": "Refresh",
-    "required": "Required",
     "runtimeReady": "Runtime ready",
     "showMore": "Show more",
     "showing": "Showing {{shown}} of {{total}}",
@@ -40,6 +33,8 @@
   "nav": {
     "overview": "Overview",
     "providers": "Providers",
+    "marketplace": "Marketplace",
+    "oauthApps": "OAuth Apps",
     "actions": "Actions",
     "runs": "Runs",
     "access": "API Key",
@@ -60,28 +55,26 @@
     },
     "headings": {
       "overview": {
-        "title": "Overview",
-        "subtitle": "Runtime status and health."
+        "title": "Overview"
       },
       "providers": {
-        "title": "Providers",
-        "subtitle": "Connect providers and review provider capabilities."
+        "title": "Providers"
+      },
+      "marketplace": { "title": "Marketplace" },
+      "oauthApps": {
+        "title": "OAuth Apps"
       },
       "actions": {
-        "title": "Actions",
-        "subtitle": "Search, inspect, and debug local runtime actions."
+        "title": "Actions"
       },
       "runs": {
-        "title": "Runs",
-        "subtitle": "Recent local action executions."
+        "title": "Runs"
       },
       "access": {
-        "title": "API Key",
-        "subtitle": "Manage runtime API tokens for agents and clients."
+        "title": "API Key"
       },
       "resources": {
-        "title": "Resources",
-        "subtitle": "Generated API references and tool metadata."
+        "title": "Resources"
       }
     }
   },
@@ -95,7 +88,6 @@
     "capabilityStatus": "Capability Status",
     "metrics": {
       "providers": "Providers",
-      "actions": "Actions",
       "executable": "Executable",
       "runHealth": "Run Health"
     },
@@ -106,8 +98,6 @@
     "unavailable": "Unavailable",
     "needsAttention": "Needs attention",
     "recentFailures": "Recent Failures",
-    "noFailedRunsTitle": "No failed runs",
-    "noFailedRunsDescription": "Recent action runs are clean.",
     "callTrend": "Tool Call Trend",
     "callTrendLegend": "Services",
     "noCallTrendTitle": "No call trend yet",
@@ -119,8 +109,88 @@
     "noRecentCallsTitle": "No recent calls",
     "noRecentCallsDescription": "Run an action to see provider call counts."
   },
+  "marketplace": {
+    "summary": {
+      "title": "Connector Marketplace",
+      "description": "Managed provider access for this Connector runtime.",
+      "providers": "Providers",
+      "actions": "Actions"
+    },
+    "status": {
+      "disabled": "Disabled",
+      "available": "Available",
+      "unavailable": "Unavailable",
+      "auth_error": "Authentication error"
+    },
+    "pricing": { "free": "Free", "metered": "Metered usage" },
+    "configuration": {
+      "title": "Configuration",
+      "description": "Connect this runtime to one Marketplace discovery endpoint.",
+      "configured": "Configured",
+      "discoveryUrl": "Discovery URL",
+      "discoveryHelp": "Connect fetches and validates this document when you save.",
+      "apiKey": "API key",
+      "apiKeyPlaceholder": "Enter a Marketplace API key",
+      "keepCurrentKey": "Leave blank to keep the current key",
+      "apiKeyHelp": "Stored with runtime encryption when an encryption key is configured.",
+      "showApiKey": "Show API key",
+      "hideApiKey": "Hide API key",
+      "connect": "Connect and validate",
+      "revalidate": "Save and revalidate",
+      "remove": "Remove configuration",
+      "removeConfirmation": "Remove the Marketplace connection?",
+      "confirmRemove": "Remove"
+    },
+    "providers": {
+      "title": "Managed providers",
+      "description": "Enable the compatible providers exposed as virtual connections.",
+      "count": "{{count}} providers",
+      "actionCount": "{{count}} catalog actions",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "enable": "Enable",
+      "disable": "Disable",
+      "emptyTitle": "No compatible providers",
+      "emptyDescription": "Connect a Marketplace whose action IDs overlap this runtime catalog."
+    },
+    "messages": {
+      "saved": "Marketplace configuration saved and validated.",
+      "saveFailed": "Could not save the Marketplace configuration.",
+      "removed": "Marketplace configuration removed.",
+      "removeFailed": "Could not remove the Marketplace configuration.",
+      "providerFailed": "Could not update the provider preference."
+    }
+  },
   "providers": {
     "catalogTitle": "Providers",
+    "viewLabel": "Provider view",
+    "views": { "manage": "My connections", "discover": "Discover apps" },
+    "discovery": {
+      "browseByTask": "Browse by task",
+      "explore": "Explore apps",
+      "scenarios": {
+        "ai": { "title": "AI & agents", "description": "Models, agents, search, and media generation" },
+        "crossBorderEcommerce": {
+          "title": "E-commerce operations",
+          "description": "Storefronts, orders, fulfillment, and market data"
+        },
+        "communication": {
+          "title": "Team collaboration",
+          "description": "Messaging, email, meetings, and notifications"
+        },
+        "docs": { "title": "Docs & knowledge", "description": "Documents, knowledge bases, drives, and spreadsheets" },
+        "productivity": {
+          "title": "Projects & productivity",
+          "description": "Projects, tasks, schedules, and automation"
+        },
+        "marketing": { "title": "Marketing & growth", "description": "Ads, content, leads, and growth data" },
+        "dataStorage": { "title": "Data & analytics", "description": "Warehouses, databases, BI, and storage" },
+        "developer": {
+          "title": "Development & cloud",
+          "description": "Code, deployment, cloud services, and observability"
+        }
+      }
+    },
     "brandNotice": "Third-party names, logos, and trademarks belong to their respective owners and are displayed only to identify the corresponding providers. This project does not claim ownership of them. Users who redistribute or commercialize this project are responsible for reviewing the applicable brand guidelines and obtaining any permissions required for their intended use.",
     "searchPlaceholder": "Search providers",
     "statusFilterLabel": "Provider status",
@@ -130,9 +200,6 @@
       "notConnected": "Not connected",
       "oauthNeedsConfig": "OAuth needs config"
     },
-    "providerMeta": "{{service}} · {{authTypes}} · {{count}} actions",
-    "noAuth": "no auth",
-    "oauthConfigBadge": "OAuth config",
     "noProvidersTitle": "No providers found",
     "noProvidersDescription": "Try a different search or status filter.",
     "resultCount": "Showing {{shown}} / {{total}}",
@@ -142,9 +209,12 @@
     "providerNotFoundDescription": "{{service}} does not match the current catalog.",
     "backToProviders": "Back to providers",
     "providerHomepage": "Homepage",
-    "selectProviderTitle": "Select a provider",
-    "selectProviderDescription": "Choose a provider to inspect connection settings.",
-    "connectedBy": "Connected by {{authType}}",
+    "marketplaceBadge": "Managed",
+    "marketplaceConnection": {
+      "title": "Managed Marketplace connection",
+      "description": "Actions can run with credentials managed by {{name}}.",
+      "manage": "Manage Marketplace"
+    },
     "configuredBadge": "Configured",
     "noSetupBadge": "No setup",
     "unconfiguredBadge": "Not connected",
@@ -152,14 +222,6 @@
     "runtimeUnavailableBadge": "Unavailable",
     "runtimeUnavailableTitle": "Unavailable in this runtime",
     "runtimeUnavailableDescription": "{{name}} remains visible for catalog reference, but connections and actions are unavailable in the current runtime.",
-    "summary": {
-      "actions": "Actions",
-      "auth": "Auth",
-      "oauthConfig": "OAuth config",
-      "configured": "Configured",
-      "required": "Required",
-      "notUsed": "Not used"
-    },
     "connection": "Connection",
     "connectionCount": "{{count}} connections",
     "savedConnections": "Saved connections",
@@ -173,6 +235,11 @@
       "duplicate": "This name is already in use. Select that connection to update it."
     },
     "connectionMethod": "Connection method",
+    "oauthAppMode": "OAuth app",
+    "oauthAppModes": {
+      "configured": "Default App",
+      "manual": "Custom App"
+    },
     "connectionDescriptions": {
       "noSetup": "This provider can run without local credentials.",
       "adding": "Configure a new named connection.",
@@ -184,7 +251,6 @@
     },
     "noConnectionMethodTitle": "No connection method",
     "noConnectionMethodDescription": "This provider does not need local credentials.",
-    "oauthClient": "OAuth Client",
     "scopes": "Scopes",
     "scopesDescription": "Scopes requested by this provider's local actions.",
     "actions": "Actions",
@@ -200,6 +266,7 @@
     "connectionMessages": {
       "noAuth": "This provider runs without local credentials.",
       "needsOAuthClient": "{{name}} needs a local OAuth client before it can connect.",
+      "manualOAuthClient": "Connect {{name}} with a custom OAuth app.",
       "connectedOAuth": "{{name}} is connected through OAuth.",
       "connectOAuth": "Connect {{name}} through its OAuth authorization flow.",
       "saving": "Saving connection...",
@@ -213,8 +280,8 @@
       "disconnectFailed": "Disconnect failed."
     },
     "buttons": {
-      "configureOAuthClient": "Configure OAuth Client",
-      "editOAuthClient": "Edit OAuth Client",
+      "configureOAuthClient": "Configure Default App",
+      "editOAuthClient": "Edit Default App",
       "saveConnection": "Save Connection",
       "addConnection": "Add Connection",
       "cancel": "Cancel",
@@ -226,14 +293,15 @@
       "connectProvider": "Connect {{name}}",
       "reconnectProvider": "Reconnect {{name}}",
       "disconnect": "Disconnect",
-      "saveOAuthClient": "Save OAuth Client",
-      "updateOAuthClient": "Update OAuth Client",
-      "resetOAuthClient": "Reset OAuth Client"
+      "saveOAuthClient": "Save Default App",
+      "updateOAuthClient": "Update Default App",
+      "resetOAuthClient": "Reset Default App"
     },
     "oauthClientSettings": {
-      "configuredTitle": "OAuth client configured",
-      "requiredTitle": "OAuth client required",
-      "missingDescription": "{{name}} needs a local OAuth client before connection.",
+      "setupTitle": "Create the OAuth app",
+      "setupIntro": "Register an OAuth app with {{name}}, then paste its credentials below.",
+      "setupDocsLink": "Open {{name}} developer portal",
+      "callbackUrl": "Callback URL",
       "clientId": "Client ID",
       "clientSecret": "Client Secret",
       "storedSecretHint": "Stored secret is not shown. Enter it again when saving changes.",
@@ -247,6 +315,27 @@
     "execution": {
       "executable": "Executable",
       "catalogOnly": "Catalog only"
+    },
+    "categoryFilterLabel": "Category",
+    "categories": {
+      "all": "All categories"
+    }
+  },
+  "oauthApps": {
+    "title": "Default OAuth Apps",
+    "description": "Manage the OAuth app used by default for each provider.",
+    "searchPlaceholder": "Search providers",
+    "configured": "Configured",
+    "notConfigured": "Not configured",
+    "configure": "Configure",
+    "edit": "Edit",
+    "emptyTitle": "No OAuth providers",
+    "emptyDescription": "The current catalog has no providers that support OAuth.",
+    "noResultsTitle": "No providers found",
+    "noResultsDescription": "Try a different search.",
+    "dialog": {
+      "configureTitle": "Configure {{name}} OAuth App",
+      "editTitle": "Edit {{name}} OAuth App"
     }
   },
   "actions": {
@@ -315,11 +404,10 @@
   },
   "access": {
     "title": "Runtime Tokens",
-    "description": "Issue bearer tokens for /v1 and MCP clients. New tokens are shown once.",
+    "description": "Authenticate /v1 and MCP clients.",
     "policy": {
-      "title": "Runtime Policy",
-      "description": "Control which actions and provider proxies this runtime may execute.",
-      "rulesHint": "Block rules take priority. Non-empty allowlists intersect across deployment, runtime, and token layers. Enter one rule per line.",
+      "title": "Access Policy",
+      "description": "Limit actions and provider proxy requests.",
       "deployment": "Deployment policy (read-only)",
       "runtime": "Runtime policy",
       "allowedActions": "Allowed actions",
@@ -330,7 +418,6 @@
       "saving": "Saving policy...",
       "saved": "Policy saved.",
       "saveFailed": "Failed to save policy.",
-      "unrestricted": "No token-specific restrictions",
       "edit": "Edit Policy",
       "editToken": "Edit Token Policy",
       "baseline": {
@@ -380,7 +467,7 @@
         "none": "No rules"
       },
       "runtimeSummary": {
-        "title": "Runtime policy configuration",
+        "title": "Runtime policy",
         "updated": "Last updated {{date}}",
         "edit": "Edit policy"
       },
@@ -389,8 +476,10 @@
         "restricted": "Allow rules: {{count}}",
         "withBlocked": "{{allow}} · Always block: {{count}}"
       },
-      "layerSummary": "Actions: {{action}} · Provider proxy: {{proxy}}",
+      "layerSummary": "Actions: {{action}} · Proxies: {{proxy}}",
       "tokenSummary": "Action allow rules {{allowed}} · Action block rules {{blocked}} · Proxy grants {{proxies}} · Further limited by the runtime baseline",
+      "connectionsUnrestricted": "All connections",
+      "connectionsRestricted": "Connections: {{names}}",
       "editor": {
         "title": "Edit runtime policy",
         "description": "Changes are previewed against deployment constraints before you save.",
@@ -434,9 +523,16 @@
         "noRules": "No rules in this list.",
         "actionAllowRequired": "Add at least one action allow rule, or choose no additional restriction.",
         "proxyAllowRequired": "Add at least one provider allow rule, or choose no additional restriction.",
-        "tokenHint": "Action rules and proxy grants are independent. An empty proxy grant list denies provider proxy requests.",
-        "discard": "Discard changes",
-        "preview": "Preview impact"
+        "connectionsTitle": "Connection access",
+        "connectionsUnrestrictedHint": "This token can use any stored connection, including default when the request omits a name.",
+        "connectionsRestrictedHint": "This token can use only the selected provider connections.",
+        "connectionsList": "Allowed connections",
+        "connectionsRequired": "Select at least one connection, or choose no additional restriction.",
+        "tooManyConnections": "A connection list cannot contain more than 128 connections.",
+        "connectionCount": "{{count}} connections",
+        "noConnections": "No connections in this list.",
+        "connectionsDefaultHint": "Select a provider's default connection to allow its unnamed HTTP, MCP, or proxy requests.",
+        "discard": "Discard changes"
       },
       "impact": {
         "title": "Draft impact",
@@ -471,8 +567,8 @@
     "copiedToken": "Copied",
     "copyRuntimeToken": "Copy runtime token",
     "copiedRuntimeToken": "Copied runtime token",
-    "noTokensTitle": "No runtime tokens yet",
-    "noTokensDescription": "Create one before connecting an MCP client or local script. The token is shown once.",
+    "noTokensTitle": "No tokens",
+    "noTokensDescription": "Create a token for /v1 or MCP access.",
     "table": {
       "name": "Name",
       "status": "Status",

@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { InterzoidActionName } from "./actions.ts";
 
 import { compactObject, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
@@ -13,7 +13,6 @@ import {
 
 const service = "interzoid";
 const interzoidApiBaseUrl = "https://api.interzoid.com";
-const interzoidDefaultRequestTimeoutMs = 30_000;
 
 type InterzoidPhase = "validate" | "execute";
 type InterzoidContext = Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">;
@@ -25,7 +24,7 @@ interface InterzoidRequestInput {
   phase: InterzoidPhase;
 }
 
-export const interzoidActionHandlers: Record<InterzoidActionName, InterzoidActionHandler> = {
+export const interzoidActionHandlers: ProviderActionHandlers<"interzoid", InterzoidActionHandler> = {
   async get_company_match_key(input, context) {
     const payload = await requestInterzoidJson(
       {
@@ -190,7 +189,7 @@ async function requestInterzoidJson(
   input: InterzoidRequestInput,
   context: InterzoidContext,
 ): Promise<Record<string, unknown>> {
-  const timeout = createProviderTimeout(context.signal, interzoidDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(context.signal);
 
   try {
     const response = await context.fetcher(buildInterzoidUrl(input, context.apiKey), {

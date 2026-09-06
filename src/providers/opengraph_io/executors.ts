@@ -1,4 +1,5 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { compactObject, optionalBoolean, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
@@ -14,7 +15,6 @@ import {
 const service = "opengraph_io";
 const opengraphIoApiBaseUrl = "https://opengraph.io";
 const opengraphIoValidationTargetUrl = "https://example.com";
-const opengraphIoRequestTimeoutMs = 30_000;
 
 type OpenGraphIoRequestPhase = "validate" | "execute";
 type OpenGraphIoQueryValue = string | number | boolean | undefined;
@@ -43,7 +43,7 @@ interface OpenGraphIoSiteResult {
   tags?: Record<string, unknown>[];
 }
 
-export const opengraphIoActionHandlers: Record<string, OpenGraphIoActionHandler> = {
+export const opengraphIoActionHandlers: ProviderActionHandlers<"opengraph_io", OpenGraphIoActionHandler> = {
   extract_site(input, context) {
     return opengraphIoExtractSite(input, context);
   },
@@ -190,7 +190,7 @@ async function opengraphIoRequest(input: {
     }
   }
 
-  const timeout = createProviderTimeout(input.context.signal, opengraphIoRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
   try {
     const response = await input.context.fetcher(url, {
       method: "GET",

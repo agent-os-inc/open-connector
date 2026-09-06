@@ -1,8 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { CompanycamActionName } from "./actions.ts";
 
-import { compactObject, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
+import {
+  compactObject,
+  optionalBooleanOrNull,
+  optionalNumber,
+  optionalRecord,
+  optionalString,
+} from "../../core/cast.ts";
 import { encodePathSegment } from "../../core/request.ts";
 import {
   createProviderTimeout,
@@ -15,7 +21,6 @@ import {
 const service = "companycam";
 const companycamApiBaseUrl = "https://api.companycam.com/v2";
 const companycamApiOrigin = "https://api.companycam.com";
-const companycamDefaultRequestTimeoutMs = 30_000;
 
 type CompanycamRequestPhase = "validate" | "execute";
 type CompanycamContext = Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">;
@@ -33,7 +38,7 @@ interface CompanycamRequest {
   currentUserEmail?: string;
 }
 
-export const companycamActionHandlers: Record<CompanycamActionName, CompanycamActionHandler> = {
+export const companycamActionHandlers: ProviderActionHandlers<"companycam", CompanycamActionHandler> = {
   async get_company(_input, context) {
     const payload = await requestCompanycamJson({ ...context, method: "GET", path: "/company", phase: "execute" });
     const company = normalizeCompany(optionalRecord(payload) ?? {});
@@ -228,7 +233,7 @@ async function requestCompanycamJson(input: CompanycamRequest): Promise<unknown>
     }
   }
 
-  const timeout = createProviderTimeout(input.signal, companycamDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.signal);
   try {
     const response = await input.fetcher(url, {
       method: input.method,
@@ -410,7 +415,7 @@ function normalizeProject(input: Record<string, unknown>): Record<string, unknow
     creatorType: asNullableString(input.creator_type),
     creatorName: asNullableString(input.creator_name),
     status: asNullableString(input.status),
-    archived: asNullableBoolean(input.archived),
+    archived: optionalBooleanOrNull(input.archived),
     name: asNullableString(input.name),
     address: normalizeNullableAddress(input.address),
     coordinates: normalizeNullableCoordinate(input.coordinates),
@@ -418,7 +423,7 @@ function normalizeProject(input: Record<string, unknown>): Record<string, unknow
     projectUrl: asNullableString(input.project_url),
     embeddedProjectUrl: asNullableString(input.embedded_project_url),
     slug: asNullableString(input.slug),
-    public: asNullableBoolean(input.public),
+    public: optionalBooleanOrNull(input.public),
     geofence: readObjectArray(input.geofence).map(normalizeCoordinate),
     notepad: asNullableString(input.notepad),
     createdAt: asNullableInteger(input.created_at),
@@ -503,8 +508,4 @@ function asNullableString(value: unknown): string | null {
 function asNullableInteger(value: unknown): number | null {
   const number = optionalNumber(value);
   return number !== undefined && Number.isInteger(number) ? number : null;
-}
-
-function asNullableBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
 }

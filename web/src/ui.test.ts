@@ -203,6 +203,8 @@ describe("loadRuntimeData", () => {
       "/api/runtime-tokens",
       "/api/runtime-policy",
       "/api/runs",
+      "/api/marketplace",
+      "/api/provider-preferences",
     ]);
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer local-token");
     for (const call of calls.slice(1)) {

@@ -1,9 +1,14 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { Ip2locationActionName } from "./actions.ts";
 
 import { compactObject, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "ip2location";
 const ip2locationApiBaseUrl = "https://api.ip2location.io";
@@ -23,7 +28,7 @@ interface Ip2locationRequestInput {
   phase: Ip2locationRequestPhase;
 }
 
-export const ip2locationActionHandlers: Record<Ip2locationActionName, Ip2locationActionHandler> = {
+export const ip2locationActionHandlers: ProviderActionHandlers<"ip2location", Ip2locationActionHandler> = {
   get_ip_geolocation(input, context) {
     return requestIp2locationJson(
       {
@@ -232,3 +237,9 @@ function readRequiredString(value: unknown, fieldName: string): string {
   }
   return text;
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://api.ip2location.io",
+  auth: { type: "api_key_query", name: "key" },
+});

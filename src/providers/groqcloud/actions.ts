@@ -5,13 +5,6 @@ import { defineProviderAction } from "../../core/provider-definition.ts";
 
 const service = "groqcloud";
 
-export type GroqcloudActionName =
-  | "list_models"
-  | "get_model"
-  | "create_chat_completion"
-  | "create_audio_transcription"
-  | "create_audio_translation";
-
 const nullSchema: JsonSchema = { type: "null", description: "Null value." };
 const unknownJsonValueSchema = s.unknown("Any JSON value accepted by the upstream API.");
 const jsonObjectSchema = s.record("Any JSON object.", unknownJsonValueSchema);
@@ -87,9 +80,6 @@ const chatCompletionInputSchema = s.object(
     stop: s.union(
       [s.string("A single stop sequence."), s.array("A list of stop sequences.", s.string("A stop sequence."))],
       { description: "One or more sequences where generation should stop." },
-    ),
-    stream: s.boolean(
-      "Whether to request a streaming response. This connector only accepts false or an omitted value.",
     ),
     temperature: s.number("The sampling temperature.", { minimum: 0, maximum: 2 }),
     tool_choice: toolChoiceSchema,

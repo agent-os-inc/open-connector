@@ -1,7 +1,9 @@
+import type { ProviderActionHandlerSubset } from "../provider-runtime.ts";
 import type { MondayProviderActionInput } from "./runtime-common.ts";
 import type { MondayActionHandler } from "./runtime-common.ts";
 
 import { compactObject } from "../../core/cast.ts";
+import { ProviderRequestError } from "../provider-runtime.ts";
 import {
   asArray,
   mondayGraphqlRequest,
@@ -13,7 +15,7 @@ import {
   normalizeMondayUpdate,
 } from "./runtime-common.ts";
 
-export const mondayCollaborationActionHandlers: Record<string, MondayActionHandler> = {
+export const mondayCollaborationActionHandlers: ProviderActionHandlerSubset<"monday", MondayActionHandler> = {
   list_updates(input, fetcher) {
     return mondayListUpdates(input, fetcher);
   },
@@ -48,14 +50,24 @@ export const mondayCollaborationActionHandlers: Record<string, MondayActionHandl
 
 async function mondayListUpdates(input: MondayProviderActionInput, fetcher: typeof fetch) {
   const source = input.input;
+  // `since`/`until` are the declared input names; monday's own arguments are
+  // `from_date`/`to_date`, so the mapping happens here rather than in the schema.
+  const since = typeof source.since === "string" ? source.since : undefined;
+  const until = typeof source.until === "string" ? source.until : undefined;
+  // monday rejects a half-open range on the root `updates` query, so a partial
+  // range is caught here instead of spending a request to be told.
+  if ((since === undefined) !== (until === undefined)) {
+    throw new ProviderRequestError(400, "since and until must be supplied together.");
+  }
+
   const payload = await mondayGraphqlRequest<{
     updates?: Array<Record<string, unknown>>;
   }>(
     input.apiKey,
     {
       query: `
-        query ListUpdates($limit: Int, $from_date: Date, $to_date: Date) {
-          updates(limit: $limit, from_date: $from_date, to_date: $to_date) {
+        query ListUpdates($limit: Int, $page: Int, $from_date: String, $to_date: String) {
+          updates(limit: $limit, page: $page, from_date: $from_date, to_date: $to_date) {
             id
             body
             created_at
@@ -70,8 +82,9 @@ async function mondayListUpdates(input: MondayProviderActionInput, fetcher: type
       `,
       variables: compactObject({
         limit: typeof source.limit === "number" ? source.limit : undefined,
-        from_date: typeof source.from_date === "string" ? source.from_date : undefined,
-        to_date: typeof source.to_date === "string" ? source.to_date : undefined,
+        page: typeof source.page === "number" ? source.page : undefined,
+        from_date: since,
+        to_date: until,
       }),
     },
     fetcher,
@@ -325,7 +338,7 @@ async function mondayUpdateDocName(input: MondayProviderActionInput, fetcher: ty
     input.apiKey,
     {
       query: `
-        mutation UpdateDocName($docId: Int!, $name: String!) {
+        mutation UpdateDocName($docId: ID!, $name: String!) {
           update_doc_name(docId: $docId, name: $name)
         }
       `,

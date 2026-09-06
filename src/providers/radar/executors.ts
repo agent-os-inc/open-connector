@@ -1,8 +1,15 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { RadarActionName } from "./actions.ts";
 
-import { compactObject, optionalBoolean, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
+import {
+  compactObject,
+  optionalBoolean,
+  optionalNumber,
+  optionalRecord,
+  optionalString,
+  recordOrEmpty,
+} from "../../core/cast.ts";
 import {
   createProviderTimeout,
   defineApiKeyProviderExecutors,
@@ -13,13 +20,12 @@ import {
 
 const service = "radar";
 const radarApiBaseUrl = "https://api.radar.io";
-const radarDefaultRequestTimeoutMs = 30_000;
 const radarValidationPath = "/v1/geocode/ip";
 
 type RadarRequestPhase = "validate" | "execute";
 type RadarActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const radarActionHandlers: Record<RadarActionName, RadarActionHandler> = {
+export const radarActionHandlers: ProviderActionHandlers<"radar", RadarActionHandler> = {
   async forward_geocode(input, context) {
     const payload = await requestRadarJson({
       path: "/v1/geocode/forward",
@@ -28,14 +34,14 @@ export const radarActionHandlers: Record<RadarActionName, RadarActionHandler> = 
         query: readRequiredString(input.query, "query"),
         layers: joinStringList(input.layers),
         country: joinCountryCodeList(input.country),
-        lang: readOptionalString(input.lang),
+        lang: optionalString(input.lang),
       }),
       context,
       phase: "execute",
     });
 
     return {
-      meta: normalizeMeta(payload.meta),
+      meta: recordOrEmpty(payload.meta),
       addresses: normalizeAddressList(payload.addresses),
     };
   },
@@ -55,7 +61,7 @@ export const radarActionHandlers: Record<RadarActionName, RadarActionHandler> = 
     });
 
     return {
-      meta: normalizeMeta(payload.meta),
+      meta: recordOrEmpty(payload.meta),
       addresses: normalizeAddressList(payload.addresses),
     };
   },
@@ -87,7 +93,7 @@ export const radarActionHandlers: Record<RadarActionName, RadarActionHandler> = 
     });
 
     return {
-      meta: normalizeMeta(payload.meta),
+      meta: recordOrEmpty(payload.meta),
       addresses: normalizeAddressList(payload.addresses),
     };
   },
@@ -116,7 +122,7 @@ export const radarActionHandlers: Record<RadarActionName, RadarActionHandler> = 
     });
 
     return {
-      meta: normalizeMeta(payload.meta),
+      meta: recordOrEmpty(payload.meta),
       places: normalizePlaceList(payload.places),
     };
   },
@@ -160,7 +166,7 @@ async function requestRadarJson(input: {
   context: Pick<ApiKeyProviderContext, "fetcher" | "signal">;
   phase: RadarRequestPhase;
 }): Promise<Record<string, unknown>> {
-  const timeout = createProviderTimeout(input.context.signal, radarDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
 
   try {
     const response = await input.context.fetcher(buildRadarUrl(input.path, input.query), {
@@ -270,7 +276,7 @@ function normalizeIpGeocodePayload(payload: Record<string, unknown>): {
   }
 
   return compactObject({
-    meta: normalizeMeta(payload.meta),
+    meta: recordOrEmpty(payload.meta),
     address: normalizeAddress(address),
     proxy: optionalBoolean(payload.proxy),
     ip: optionalString(payload.ip),
@@ -280,10 +286,6 @@ function normalizeIpGeocodePayload(payload: Record<string, unknown>): {
     proxy?: boolean;
     ip?: string;
   };
-}
-
-function normalizeMeta(value: unknown): Record<string, unknown> {
-  return optionalRecord(value) ?? {};
 }
 
 function normalizeAddressList(value: unknown): Array<Record<string, unknown>> {
@@ -415,10 +417,6 @@ function readRequiredString(value: unknown, fieldName: string): string {
   }
 
   return stringValue;
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return optionalString(value);
 }
 
 function readRequiredNumber(value: unknown, fieldName: string): number {

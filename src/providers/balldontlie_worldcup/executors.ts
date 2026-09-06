@@ -1,7 +1,8 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
-import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
+import { compactObject, optionalRawString, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
   ProviderRequestError,
@@ -35,7 +36,10 @@ const balldontlieListEndpoints = {
 type BalldontlieActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 type BalldontliePhase = "validate" | "execute";
 
-export const balldontlieWorldcupActionHandlers: Record<string, BalldontlieActionHandler> = {
+export const balldontlieWorldcupActionHandlers: ProviderActionHandlers<
+  "balldontlie_worldcup",
+  BalldontlieActionHandler
+> = {
   async list_teams(input, context) {
     const payload = await balldontlieRequestJson({
       path: "/teams",
@@ -123,14 +127,14 @@ export const credentialValidators: CredentialValidators = {
 
     return {
       profile: {
-        accountId: readString(firstTeam?.id),
+        accountId: optionalRawString(firstTeam?.id),
         displayName: "BALLDONTLIE World Cup API Key",
       },
       grantedScopes: [],
       metadata: compactObject({
         apiBaseUrl: balldontlieWorldcupBaseUrl,
         validationEndpoint: "/teams",
-        firstTeam: readString(firstTeam?.name),
+        firstTeam: optionalRawString(firstTeam?.name),
       }),
     };
   },
@@ -304,10 +308,6 @@ function readRequiredInteger(value: unknown, fieldName: string): number {
     throw new ProviderRequestError(400, `${fieldName} is required`);
   }
   return value;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function isAbortError(error: unknown): boolean {

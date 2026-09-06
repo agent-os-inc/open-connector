@@ -1,8 +1,14 @@
-import type { CredentialValidationResult, ProviderExecutors } from "../../core/types.ts";
-import type { ApiKeyProviderContext } from "../provider-runtime.ts";
+import type { CredentialValidationResult, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ApiKeyProviderContext, ProviderActionHandlers, ProviderActionSources } from "../provider-runtime.ts";
 
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  mapProviderActionSources,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "redfox";
 const redfoxApiBaseUrl = "https://redfox.hk";
@@ -18,9 +24,10 @@ interface RedfoxEndpoint {
   path: string;
   buildBody(input: Record<string, unknown>): RedfoxBody;
   successCodes?: readonly number[];
+  responseMode?: "wrapped" | "directWorkList";
 }
 
-const redfoxEndpoints: Record<string, RedfoxEndpoint> = {
+const redfoxEndpoints: ProviderActionSources<"redfox", RedfoxEndpoint> = {
   search_douyin_works: { path: "/story/api/dyData/searchArticle", buildBody: buildSearchBody },
   search_douyin_users: { path: "/story/api/dyData/searchUser", buildBody: buildSearchBody },
   get_douyin_work: {
@@ -58,7 +65,19 @@ const redfoxEndpoints: Record<string, RedfoxEndpoint> = {
     },
   },
   search_douyin_ai_creations: { path: "/story/api/parseWork/queryDyAiMsgs", buildBody: buildAiCreationSearchBody },
-  search_xiaohongshu_works: { path: "/story/api/xhsUser/searchArticle", buildBody: buildSearchBody },
+  search_xiaohongshu_works: {
+    path: "/story/api/xhs/search/keywordSearchWork",
+    responseMode: "directWorkList",
+    buildBody(input) {
+      return {
+        keyword: readRequiredString(input.keyword, "keyword"),
+        noteTime: readOptionalString(input.noteTime),
+        sort: readOptionalString(input.sort),
+        page: readOptionalPositiveInteger(input.page, "page"),
+        noteType: readOptionalString(input.noteType),
+      };
+    },
+  },
   search_xiaohongshu_users: { path: "/story/api/xhsUser/searchUser", buildBody: buildSearchBody },
   get_xiaohongshu_work: {
     path: "/story/api/xhsUser/queryWorkDetail",
@@ -154,20 +173,21 @@ const redfoxEndpoints: Record<string, RedfoxEndpoint> = {
   },
 };
 
-export const redfoxActionHandlers: Record<string, RedfoxActionHandler> = Object.fromEntries(
-  Object.entries(redfoxEndpoints).map(([actionName, endpoint]) => [
-    actionName,
-    (input: Record<string, unknown>, context: ApiKeyProviderContext) =>
+export const redfoxActionHandlers: ProviderActionHandlers<"redfox", RedfoxActionHandler> = mapProviderActionSources(
+  service,
+  redfoxEndpoints,
+  (_actionName, endpoint): RedfoxActionHandler =>
+    (input, context) =>
       requestRedfoxJson({
         apiKey: context.apiKey,
         path: endpoint.path,
         body: endpoint.buildBody(input),
         successCodes: endpoint.successCodes,
+        responseMode: endpoint.responseMode,
         context,
         mode: "execute",
       }),
-  ]),
-) as Record<string, RedfoxActionHandler>;
+);
 
 export const executors: ProviderExecutors = defineApiKeyProviderExecutors(service, redfoxActionHandlers);
 
@@ -203,6 +223,7 @@ async function requestRedfoxJson(input: {
   path: string;
   body: RedfoxBody;
   successCodes?: readonly number[];
+  responseMode?: "wrapped" | "directWorkList";
   context: Pick<ApiKeyProviderContext, "fetcher" | "signal">;
   mode: RedfoxRequestMode;
 }): Promise<unknown> {
@@ -229,6 +250,14 @@ async function requestRedfoxJson(input: {
 
   if (!response.ok) {
     throw createRedfoxHttpError(response.status, payload, input.mode);
+  }
+
+  if (input.responseMode === "directWorkList") {
+    const record = optionalRecord(payload);
+    if (!record || !Array.isArray(record.workList)) {
+      throw new ProviderRequestError(502, "RedFoxHub returned an invalid Xiaohongshu work-list response");
+    }
+    return { code: 2000, msg: "成功", data: record };
   }
 
   const normalized = normalizeRedfoxPayload(payload);
@@ -361,6 +390,12 @@ function readRequiredString(value: unknown, fieldName: string): string {
   }
   return result;
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://redfox.hk",
+  auth: { type: "api_key_header", name: "redfox_api_key" },
+});
 
 function readOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {

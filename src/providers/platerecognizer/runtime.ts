@@ -1,4 +1,5 @@
 import type { CredentialValidationResult, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import {
@@ -12,6 +13,7 @@ import {
 import {
   defineApiKeyProviderExecutors,
   ProviderRequestError,
+  providerResponseError,
   providerUserAgent,
   readTransitFileInput,
 } from "../provider-runtime.ts";
@@ -27,7 +29,7 @@ type PlateRecognizerActionHandler = (
   context: ApiKeyProviderContext,
 ) => Promise<unknown>;
 
-export const platerecognizerActionHandlers: Record<string, PlateRecognizerActionHandler> = {
+export const platerecognizerActionHandlers: ProviderActionHandlers<"platerecognizer", PlateRecognizerActionHandler> = {
   async read_number_plates(input, context) {
     return normalizePlateReaderPayload(
       await requestPlateRecognizerJson({
@@ -282,8 +284,4 @@ function readRequiredInteger(value: unknown, fieldName: string): number {
     return value;
   }
   throw new ProviderRequestError(502, `${fieldName} must be an integer`);
-}
-
-function providerResponseError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
 }

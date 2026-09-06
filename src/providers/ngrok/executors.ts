@@ -1,27 +1,27 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { NgrokActionName } from "./actions.ts";
 
 import { createHash } from "node:crypto";
-import { compactObject, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
   createProviderTimeout,
   defineApiKeyProviderExecutors,
   isAbortLikeError,
   providerUserAgent,
   ProviderRequestError,
+  requiredInputString,
 } from "../provider-runtime.ts";
 
 const service = "ngrok";
 const ngrokApiBaseUrl = "https://api.ngrok.com";
 const ngrokApiVersion = "2";
-const ngrokDefaultRequestTimeoutMs = 30_000;
 const ngrokValidationPath = "/endpoints";
 
 type NgrokRequestPhase = "validate" | "execute";
 type NgrokActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const ngrokActionHandlers: Record<NgrokActionName, NgrokActionHandler> = {
+export const ngrokActionHandlers: ProviderActionHandlers<"ngrok", NgrokActionHandler> = {
   list_endpoints(input, context) {
     return requestNgrokJson({
       context,
@@ -34,7 +34,7 @@ export const ngrokActionHandlers: Record<NgrokActionName, NgrokActionHandler> = 
     return requestNgrokJson({
       context,
       phase: "execute",
-      path: `/endpoints/${encodeURIComponent(readInputString(input.endpoint_id, "endpoint_id"))}`,
+      path: `/endpoints/${encodeURIComponent(requiredInputString(input.endpoint_id, "endpoint_id"))}`,
     });
   },
   list_tunnels(input, context) {
@@ -65,7 +65,7 @@ export const ngrokActionHandlers: Record<NgrokActionName, NgrokActionHandler> = 
     return requestNgrokJson({
       context,
       phase: "execute",
-      path: `/reserved_domains/${encodeURIComponent(readInputString(input.reserved_domain_id, "reserved_domain_id"))}`,
+      path: `/reserved_domains/${encodeURIComponent(requiredInputString(input.reserved_domain_id, "reserved_domain_id"))}`,
     });
   },
 };
@@ -124,7 +124,7 @@ async function requestNgrokJson(input: {
     }
   }
 
-  const timeout = createProviderTimeout(input.context.signal, ngrokDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
 
   try {
     const response = await input.context.fetcher(url.toString(), {
@@ -209,10 +209,6 @@ function buildListQuery(input: Record<string, unknown>, includeFilter: boolean):
     before_id: optionalString(input.before_id),
     filter: includeFilter ? optionalString(input.filter) : undefined,
   });
-}
-
-function readInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function buildNgrokAccountId(apiKey: string): string {

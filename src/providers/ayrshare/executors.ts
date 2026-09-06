@@ -1,4 +1,5 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import {
@@ -11,6 +12,7 @@ import {
 } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
+  providerInputError,
   ProviderRequestError,
   providerUserAgent,
   requireApiKeyCredential,
@@ -28,7 +30,7 @@ type AyrshareRequestPhase = "validate" | "execute";
 type AyrshareMethod = "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 type AyrshareActionHandler = (input: Record<string, unknown>, context: AyrshareContext) => Promise<unknown>;
 
-export const ayrshareActionHandlers: Record<string, AyrshareActionHandler> = {
+export const ayrshareActionHandlers: ProviderActionHandlers<"ayrshare", AyrshareActionHandler> = {
   get_user_profile(input, context) {
     return getUserProfile(input, context);
   },
@@ -186,7 +188,7 @@ async function publishPost(input: Record<string, unknown>, context: AyrshareCont
 }
 
 async function getPost(input: Record<string, unknown>, context: AyrshareContext): Promise<Record<string, unknown>> {
-  const id = requiredString(input.id, "id", invalidInputError);
+  const id = requiredString(input.id, "id", providerInputError);
   const payload = await requestAyrshareJson(
     {
       method: "GET",
@@ -231,7 +233,7 @@ async function deletePost(input: Record<string, unknown>, context: AyrshareConte
 
 async function updatePost(input: Record<string, unknown>, context: AyrshareContext): Promise<Record<string, unknown>> {
   const body = compactObject({
-    id: requiredString(input.id, "id", invalidInputError),
+    id: requiredString(input.id, "id", providerInputError),
     approved: optionalBoolean(input.approved),
     disableComments: optionalBoolean(input.disableComments),
     notes: optionalString(input.notes),
@@ -265,7 +267,7 @@ async function retryPost(input: Record<string, unknown>, context: AyrshareContex
       path: "/post/retry",
       context,
       body: {
-        id: requiredString(input.id, "id", invalidInputError),
+        id: requiredString(input.id, "id", providerInputError),
       },
     },
     "execute",
@@ -339,7 +341,7 @@ async function verifyMediaUrl(
       path: "/media/urlExists",
       context,
       body: {
-        mediaUrl: requiredString(input.mediaUrl, "mediaUrl", invalidInputError),
+        mediaUrl: requiredString(input.mediaUrl, "mediaUrl", providerInputError),
       },
     },
     "execute",
@@ -366,7 +368,7 @@ async function getPostAnalytics(
       path: "/analytics/post",
       context,
       body: compactObject({
-        id: requiredString(input.id, "id", invalidInputError),
+        id: requiredString(input.id, "id", providerInputError),
         platforms: readOptionalStringArray(input.platforms),
       }),
     },
@@ -579,10 +581,6 @@ function collectSuffixNumbers(object: Record<string, unknown>, suffix: string): 
 
 function uncapitalizeFirst(value: string): string {
   return value ? `${value[0]?.toLowerCase()}${value.slice(1)}` : value;
-}
-
-function invalidInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }
 
 function isAbortError(error: unknown): boolean {

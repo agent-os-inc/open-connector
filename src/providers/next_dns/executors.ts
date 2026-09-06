@@ -1,9 +1,15 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { NextDnsActionName } from "./actions.ts";
 
-import { compactObject, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
+import {
+  defineApiKeyProviderExecutors,
+  isAbortLikeError,
+  providerUserAgent,
+  ProviderRequestError,
+  requiredInputString,
+} from "../provider-runtime.ts";
 
 const service = "next_dns";
 const nextDnsApiBaseUrl = "https://api.nextdns.io";
@@ -12,7 +18,7 @@ const nextDnsValidationPath = "/profiles";
 type NextDnsRequestPhase = "validate" | "execute";
 type NextDnsActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const nextDnsActionHandlers: Record<NextDnsActionName, NextDnsActionHandler> = {
+export const nextDnsActionHandlers: ProviderActionHandlers<"next_dns", NextDnsActionHandler> = {
   async list_profiles(_input, context) {
     return normalizeNextDnsListPayload(
       await requestNextDnsJson({
@@ -25,7 +31,7 @@ export const nextDnsActionHandlers: Record<NextDnsActionName, NextDnsActionHandl
   },
   async get_profile(input, context) {
     const payload = await requestNextDnsJson({
-      path: `/profiles/${encodeURIComponent(readInputString(input.profileId, "profileId"))}`,
+      path: `/profiles/${encodeURIComponent(requiredInputString(input.profileId, "profileId"))}`,
       query: {},
       context,
       phase: "execute",
@@ -39,7 +45,7 @@ export const nextDnsActionHandlers: Record<NextDnsActionName, NextDnsActionHandl
   async get_logs(input, context) {
     return normalizeNextDnsListPayload(
       await requestNextDnsJson({
-        path: `/profiles/${encodeURIComponent(readInputString(input.profileId, "profileId"))}/logs`,
+        path: `/profiles/${encodeURIComponent(requiredInputString(input.profileId, "profileId"))}/logs`,
         query: buildLogsQuery(input),
         context,
         phase: "execute",
@@ -98,7 +104,7 @@ function requestNextDnsAnalytics(
   family: string,
 ): Promise<unknown> {
   return requestNextDnsJson({
-    path: `/profiles/${encodeURIComponent(readInputString(input.profileId, "profileId"))}/analytics/${family}`,
+    path: `/profiles/${encodeURIComponent(requiredInputString(input.profileId, "profileId"))}/analytics/${family}`,
     query: buildAnalyticsQuery(input),
     context,
     phase: "execute",
@@ -278,12 +284,4 @@ function mapNextDnsError(
   }
 
   return new ProviderRequestError(status || 502, normalizedMessage, payload);
-}
-
-function readInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }

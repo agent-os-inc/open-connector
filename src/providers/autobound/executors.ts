@@ -1,9 +1,11 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { compactObject, optionalBoolean, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
+  defineProviderProxy,
   ProviderRequestError,
   providerUserAgent,
   requireApiKeyCredential,
@@ -26,7 +28,7 @@ interface AutoboundRequestInput {
   phase: AutoboundRequestPhase;
 }
 
-export const autoboundActionHandlers: Record<string, AutoboundActionHandler> = {
+export const autoboundActionHandlers: ProviderActionHandlers<"autobound", AutoboundActionHandler> = {
   async get_account(_input, context) {
     const payload = await requestAutoboundJson({
       context,
@@ -524,3 +526,9 @@ function stringifyQuery(input: Record<string, QueryValue>): Record<string, strin
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://signals.autobound.ai",
+  auth: { type: "api_key_header", name: "x-api-key" },
+});

@@ -4,7 +4,7 @@ import type {
   ExecutionContext,
   ProviderExecutors,
 } from "../../core/types.ts";
-import type { Knowbe4ActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { compactObject, optionalInteger, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
@@ -19,7 +19,6 @@ import {
 const service = "knowbe4";
 const knowbe4ReportingValidationPath = "/v1/account";
 const knowbe4DefaultRegion = "us";
-const knowbe4DefaultRequestTimeoutMs = 30_000;
 
 const knowbe4RegionBaseUrls = {
   us: "https://us.api.knowbe4.com",
@@ -46,7 +45,7 @@ interface Knowbe4RequestInput extends Knowbe4ActionContext {
   query?: Record<string, string | undefined>;
 }
 
-export const knowbe4ActionHandlers: Record<Knowbe4ActionName, Knowbe4ActionHandler> = {
+export const knowbe4ActionHandlers: ProviderActionHandlers<"knowbe4", Knowbe4ActionHandler> = {
   async get_account(_input, context): Promise<unknown> {
     const account = requireObjectPayload(
       await requestKnowbe4Json({
@@ -204,7 +203,7 @@ async function requestKnowbe4JsonWithResponse(
     }
   }
 
-  const timeout = createProviderTimeout(input.signal, knowbe4DefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.signal);
   let response: Response;
   let payload: unknown;
   try {

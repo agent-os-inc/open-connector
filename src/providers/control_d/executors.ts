@@ -1,5 +1,5 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
-import type { ControlDActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { createHash } from "node:crypto";
 import { compactObject, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
@@ -13,7 +13,6 @@ import {
 
 const service = "control_d";
 const apiBaseUrl = "https://api.controld.com";
-const defaultRequestTimeoutMs = 30_000;
 
 type ControlDRequestPhase = "validate" | "execute";
 
@@ -25,7 +24,7 @@ interface ControlDContext {
 
 type ControlDActionHandler = (input: Record<string, unknown>, context: ControlDContext) => Promise<unknown>;
 
-const actionHandlers: Record<ControlDActionName, ControlDActionHandler> = {
+const actionHandlers: ProviderActionHandlers<"control_d", ControlDActionHandler> = {
   get_current_ip(_input, context) {
     return getCurrentIp(context);
   },
@@ -247,7 +246,7 @@ async function requestControlD(input: {
 
   let response: Response;
   let payload: unknown;
-  const timeout = createProviderTimeout(input.context.signal, defaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
   try {
     response = await input.context.fetcher(new URL(input.path, apiBaseUrl), {
       method: input.method ?? "GET",

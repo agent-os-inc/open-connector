@@ -1,9 +1,15 @@
 import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 import type { DadataRuActionName } from "./actions.ts";
 
 import { compactObject, optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerInputError,
+  providerUserAgent,
+  ProviderRequestError,
+} from "../provider-runtime.ts";
 
 const service = "dadata_ru";
 const dadataRuApiBaseUrl = "https://suggestions.dadata.ru/suggestions/api/4_1/rs";
@@ -20,7 +26,7 @@ const dadataRuEndpointByAction: Record<DadataRuActionName, string> = {
   suggest_email: "/suggest/email",
 };
 
-export const dadataRuActionHandlers: Record<DadataRuActionName, DadataRuActionHandler> = {
+export const dadataRuActionHandlers: ProviderActionHandlers<"dadata_ru", DadataRuActionHandler> = {
   suggest_address(input, context) {
     return dadataRuSuggest("suggest_address", input, context);
   },
@@ -190,8 +196,4 @@ function firstSuggestionValue(payload: unknown): string | undefined {
     return undefined;
   }
   return optionalString(optionalRecord(suggestions[0])?.value);
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

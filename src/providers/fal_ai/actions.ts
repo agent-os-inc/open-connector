@@ -19,6 +19,11 @@ const falLogEntrySchema = s.object("A queue log entry.", {
   source: s.string("The log source identifier."),
   timestamp: s.string("The log timestamp in ISO 8601 format."),
 });
+const falAiQueueLifecycle = {
+  startActionId: "fal_ai.submit_queue_request",
+  statusActionId: "fal_ai.queue_get_status",
+  cancelActionId: "fal_ai.cancel_queue_request",
+};
 
 export const falAiActions: ActionDefinition[] = [
   defineProviderAction(service, {
@@ -118,17 +123,49 @@ export const falAiActions: ActionDefinition[] = [
     ),
   }),
   defineProviderAction(service, {
+    name: "submit_queue_request",
+    description: "Submit a job to a fal model endpoint's async queue and return the URLs used to track it.",
+    followUpActions: ["fal_ai.queue_get_status", "fal_ai.get_queue_request_result", "fal_ai.cancel_queue_request"],
+    asyncLifecycle: falAiQueueLifecycle,
+    inputSchema: s.object(
+      "The model and payload to submit.",
+      {
+        modelId: s.nonEmptyString("The model identifier, such as fal-ai/flux/schnell."),
+        input: falObject,
+        webhookUrl: s.url("An optional URL fal calls with the final result."),
+      },
+      {
+        required: ["modelId", "input"],
+      },
+    ),
+    outputSchema: s.object(
+      "The submitted queue request.",
+      {
+        requestId: s.string("The queue request identifier."),
+        status: s.string("The initial queue status."),
+        queuePosition: s.nullable(s.integer("The initial queue position when available.")),
+        statusUrl: s.string("The exact URL used to poll request status."),
+        responseUrl: s.string("The exact URL used to fetch the result."),
+        cancelUrl: s.string("The exact URL used to cancel the request."),
+      },
+      {
+        required: ["requestId", "status", "queuePosition", "statusUrl", "responseUrl", "cancelUrl"],
+      },
+    ),
+  }),
+  defineProviderAction(service, {
     name: "queue_get_status",
     description:
       "Check the status of a queued fal request, with optional log retrieval for in-progress or completed work.",
+    asyncLifecycle: falAiQueueLifecycle,
     inputSchema: s.object(
       "The input payload for this action.",
       {
-        modelId: s.string("The model identifier in namespace/name format."),
-        requestId: s.string("The queued request identifier."),
+        statusUrl: s.url("The exact status URL returned by submit_queue_request."),
         logs: s.integer("Set to 1 to include logs in the response.", { minimum: 0, maximum: 1 }),
       },
       {
+        required: ["statusUrl"],
         optional: ["logs"],
       },
     ),
@@ -152,14 +189,14 @@ export const falAiActions: ActionDefinition[] = [
     inputSchema: s.object(
       "The input payload for this action.",
       {
-        modelId: s.string("The model identifier in namespace/name format."),
-        requestId: s.string("The queued request identifier."),
+        statusUrl: s.url("The exact status URL returned by submit_queue_request."),
         logs: s.integer("Set to 1 to include logs inside streamed updates.", {
           minimum: 0,
           maximum: 1,
         }),
       },
       {
+        required: ["statusUrl"],
         optional: ["logs"],
       },
     ),
@@ -181,36 +218,34 @@ export const falAiActions: ActionDefinition[] = [
     inputSchema: s.object(
       "The input payload for this action.",
       {
-        modelId: s.string("The model identifier in namespace/name format."),
-        requestId: s.string("The queued request identifier."),
+        responseUrl: s.url("The exact response URL returned by submit_queue_request."),
       },
       {
-        required: ["modelId", "requestId"],
+        required: ["responseUrl"],
       },
     ),
     outputSchema: s.object(
       "The output payload for this action.",
       {
-        status: s.string("The final request status returned by the queue API."),
-        logs: s.array("The logs captured for the queued request.", falLogEntrySchema),
+        status: s.string("The completed request status."),
         response: falObject,
       },
       {
-        required: ["status", "logs", "response"],
+        required: ["status", "response"],
       },
     ),
   }),
   defineProviderAction(service, {
     name: "cancel_queue_request",
-    description: "Request cancellation of a queued or in-progress fal request by model ID and request ID.",
+    description: "Cancel a queued or in-progress fal request using its cancellation URL.",
+    asyncLifecycle: falAiQueueLifecycle,
     inputSchema: s.object(
       "The input payload for this action.",
       {
-        modelId: s.string("The model identifier in namespace/name format."),
-        requestId: s.string("The queued request identifier."),
+        cancelUrl: s.url("The exact cancel URL returned by submit_queue_request."),
       },
       {
-        required: ["modelId", "requestId"],
+        required: ["cancelUrl"],
       },
     ),
     outputSchema: s.object(
@@ -224,13 +259,3 @@ export const falAiActions: ActionDefinition[] = [
     ),
   }),
 ];
-
-export type FalAiActionName =
-  | "get_models"
-  | "get_pricing"
-  | "estimate_pricing"
-  | "get_jwks"
-  | "queue_get_status"
-  | "queue_get_status_stream"
-  | "get_queue_request_result"
-  | "cancel_queue_request";

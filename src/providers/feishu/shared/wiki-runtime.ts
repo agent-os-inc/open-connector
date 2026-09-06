@@ -1,6 +1,7 @@
 import type { FeishuJsonRequest } from "./client.ts";
 
-import { ProviderRequestError } from "../../provider-runtime.ts";
+import { optionalBoolean, optionalNumber } from "../../../core/cast.ts";
+import { providerInputError } from "../../provider-runtime.ts";
 
 interface WikiActionHandler {
   (input: Record<string, unknown>): Promise<unknown>;
@@ -116,7 +117,7 @@ async function createNode(input: Record<string, unknown>, request: FeishuJsonReq
   const nodeType = optionalString(input.nodeType) ?? "origin";
   const originNodeToken = optionalString(input.originNodeToken);
   if (nodeType === "shortcut" && !originNodeToken) {
-    throw invalidInput("originNodeToken is required for shortcut nodes");
+    throw providerInputError("originNodeToken is required for shortcut nodes");
   }
   const data = await request({
     method: "POST",
@@ -138,7 +139,7 @@ async function copyNode(input: Record<string, unknown>, request: FeishuJsonReque
   const targetSpaceId = optionalString(input.targetSpaceId);
   const targetParentToken = optionalString(input.targetParentToken);
   if (Boolean(targetSpaceId) === Boolean(targetParentToken)) {
-    throw invalidInput("provide exactly one of targetSpaceId or targetParentToken");
+    throw providerInputError("provide exactly one of targetSpaceId or targetParentToken");
   }
   const data = await request({
     method: "POST",
@@ -280,10 +281,11 @@ async function removeMember(input: Record<string, unknown>, request: FeishuJsonR
 }
 
 function normalizePage(data: Record<string, unknown>) {
+  const hasMore = data.has_more === true;
   return {
     items: recordArray(data.items),
-    hasMore: data.has_more === true,
-    pageToken: optionalString(data.page_token) ?? null,
+    hasMore,
+    pageToken: hasMore ? (optionalString(data.page_token) ?? null) : null,
   };
 }
 
@@ -303,19 +305,11 @@ function requiredString(value: unknown, field: string) {
   if (typeof value === "string" && value.length > 0) {
     return value;
   }
-  throw invalidInput(`${field} must be a non-empty string`);
+  throw providerInputError(`${field} must be a non-empty string`);
 }
 
 function optionalString(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function optionalNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function optionalBoolean(value: unknown) {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function compact(value: Record<string, unknown>) {
@@ -324,8 +318,4 @@ function compact(value: Record<string, unknown>) {
 
 function encode(value: string) {
   return encodeURIComponent(value);
-}
-
-function invalidInput(message: string) {
-  return new ProviderRequestError(400, message);
 }

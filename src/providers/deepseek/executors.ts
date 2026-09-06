@@ -1,9 +1,14 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { DeepseekActionName } from "./actions.ts";
 
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "deepseek";
 const deepseekApiBaseUrl = "https://api.deepseek.com";
@@ -11,7 +16,7 @@ const deepseekAnthropicApiBaseUrl = "https://api.deepseek.com/anthropic";
 
 type DeepseekActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const deepseekActionHandlers: Record<DeepseekActionName, DeepseekActionHandler> = {
+export const deepseekActionHandlers: ProviderActionHandlers<"deepseek", DeepseekActionHandler> = {
   list_models(_input, context) {
     return deepseekRequest(context, { path: "/models" });
   },
@@ -145,3 +150,9 @@ async function readDeepseekError(response: Response): Promise<{ type: string; co
     };
   }
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://api.deepseek.com",
+  auth: { type: "api_key_authorization", prefix: "Bearer " },
+});

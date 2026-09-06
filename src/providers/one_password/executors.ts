@@ -1,8 +1,8 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
-import type { OnePasswordActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { createHash } from "node:crypto";
-import { optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import { assertPublicHttpUrl } from "../../core/request.ts";
 import {
   createProviderTimeout,
@@ -11,11 +11,11 @@ import {
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
+  requiredInputString,
 } from "../provider-runtime.ts";
 
 const service = "one_password";
 const onePasswordValidationPath = "/v1/vaults";
-const onePasswordRequestTimeoutMs = 30_000;
 
 type OnePasswordPhase = "validate" | "execute";
 type OnePasswordActionHandler = (input: Record<string, unknown>, context: OnePasswordContext) => Promise<unknown>;
@@ -34,7 +34,7 @@ interface OnePasswordRequestInput {
   query?: Record<string, string | number | boolean | undefined>;
 }
 
-export const onePasswordActionHandlers: Record<OnePasswordActionName, OnePasswordActionHandler> = {
+export const onePasswordActionHandlers: ProviderActionHandlers<"one_password", OnePasswordActionHandler> = {
   async get_health(_input, context) {
     const health = await requestOnePasswordJson({
       context,
@@ -63,7 +63,7 @@ export const onePasswordActionHandlers: Record<OnePasswordActionName, OnePasswor
   async get_vault(input, context) {
     const vault = await requestOnePasswordJson({
       context,
-      path: `/v1/vaults/${encodeURIComponent(readInputString(input.vaultId, "vaultId"))}`,
+      path: `/v1/vaults/${encodeURIComponent(requiredInputString(input.vaultId, "vaultId"))}`,
       phase: "execute",
     });
 
@@ -74,7 +74,7 @@ export const onePasswordActionHandlers: Record<OnePasswordActionName, OnePasswor
   async list_items(input, context) {
     const items = await requestOnePasswordJson({
       context,
-      path: `/v1/vaults/${encodeURIComponent(readInputString(input.vaultId, "vaultId"))}/items`,
+      path: `/v1/vaults/${encodeURIComponent(requiredInputString(input.vaultId, "vaultId"))}/items`,
       query: {
         filter: optionalString(input.filter),
       },
@@ -86,8 +86,8 @@ export const onePasswordActionHandlers: Record<OnePasswordActionName, OnePasswor
     };
   },
   async get_item(input, context) {
-    const vaultId = readInputString(input.vaultId, "vaultId");
-    const itemId = readInputString(input.itemId, "itemId");
+    const vaultId = requiredInputString(input.vaultId, "vaultId");
+    const itemId = requiredInputString(input.itemId, "itemId");
     const item = await requestOnePasswordJson({
       context,
       path: `/v1/vaults/${encodeURIComponent(vaultId)}/items/${encodeURIComponent(itemId)}`,
@@ -166,7 +166,7 @@ export const credentialValidators: CredentialValidators = {
 };
 
 async function requestOnePasswordJson(input: OnePasswordRequestInput): Promise<unknown> {
-  const timeout = createProviderTimeout(input.context.signal, onePasswordRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
   try {
     const response = await input.context.fetcher(buildOnePasswordUrl(input), {
       method: "GET",
@@ -281,10 +281,6 @@ function normalizeOnePasswordBaseUrl(value: unknown): string {
   url.hash = "";
   url.search = "";
   return trimTrailingSlash(url.toString());
-}
-
-function readInputString(value: unknown, key: string): string {
-  return requiredString(value, key, (message) => new ProviderRequestError(400, message));
 }
 
 function requireObjectPayload(payload: unknown, label: string): Record<string, unknown> {

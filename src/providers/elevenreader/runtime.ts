@@ -1,8 +1,9 @@
 import type { CredentialValidationResult } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext, ProviderRuntimeHandler } from "../provider-runtime.ts";
-import type { ElevenreaderActionName } from "./actions.ts";
 
 import {
+  booleanString,
   compactObject,
   optionalBoolean,
   optionalInteger,
@@ -12,7 +13,7 @@ import {
   stringRecord,
 } from "../../core/cast.ts";
 import { readBoundedResponseBytes } from "../../core/request.ts";
-import { providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import { providerInputError, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
 
 const elevenreaderApiBaseUrl = "https://api.elevenlabs.io/v1";
 
@@ -30,7 +31,7 @@ interface NormalizedElevenreaderUser extends Record<string, unknown> {
   subscription: NormalizedElevenreaderSubscription;
 }
 
-export const elevenreaderActionHandlers: Record<ElevenreaderActionName, ElevenreaderActionHandler> = {
+export const elevenreaderActionHandlers: ProviderActionHandlers<"elevenreader", ElevenreaderActionHandler> = {
   get_user_info(_input, context) {
     return getElevenreaderUserInfo(context);
   },
@@ -126,7 +127,7 @@ async function searchElevenreaderVoices(
       sort_direction: optionalString(input.sortDirection),
       page_size: integerQueryValue(input.pageSize),
       next_page_token: optionalString(input.nextPageToken),
-      include_total_count: booleanQueryValue(input.includeTotalCount),
+      include_total_count: booleanString(input.includeTotalCount),
     }) as Record<string, string | undefined>,
     apiKey: context.apiKey,
     fetcher: context.fetcher,
@@ -147,11 +148,11 @@ async function getElevenreaderVoice(
   input: Record<string, unknown>,
   context: ApiKeyProviderContext,
 ): Promise<{ voice: Record<string, unknown> }> {
-  const voiceId = requiredString(input.voiceId, "voiceId", badInput);
+  const voiceId = requiredString(input.voiceId, "voiceId", providerInputError);
   const payload = await requestElevenreaderJson<Record<string, unknown>>({
     path: `/voices/${encodeURIComponent(voiceId)}`,
     query: compactObject({
-      with_settings: booleanQueryValue(input.withSettings),
+      with_settings: booleanString(input.withSettings),
     }) as Record<string, string | undefined>,
     apiKey: context.apiKey,
     fetcher: context.fetcher,
@@ -172,8 +173,8 @@ async function readElevenreaderText(
     throw new ProviderRequestError(400, "ElevenReader read_text requires local transit file storage.");
   }
 
-  const voiceId = requiredString(input.voiceId, "voiceId", badInput);
-  const text = requiredString(input.text, "text", badInput);
+  const voiceId = requiredString(input.voiceId, "voiceId", providerInputError);
+  const text = requiredString(input.text, "text", providerInputError);
   const outputFormat = optionalString(input.outputFormat) ?? "mp3_44100_128";
   const modelId = optionalString(input.modelId);
   const response = await context.fetcher(
@@ -440,10 +441,6 @@ function normalizeObjectArray(value: unknown): Record<string, unknown>[] | undef
   return Array.isArray(value) ? value.map((item) => requireObject(item, "elevenreader object array item")) : undefined;
 }
 
-function booleanQueryValue(value: unknown): string | undefined {
-  return typeof value === "boolean" ? String(value) : undefined;
-}
-
 function integerQueryValue(value: unknown): string | undefined {
   return Number.isInteger(value) ? String(value) : undefined;
 }
@@ -501,8 +498,4 @@ function requireResponseBoolean(value: unknown, fieldName: string): boolean {
     throw new ProviderRequestError(502, `ElevenReader response is missing ${fieldName}`);
   }
   return value;
-}
-
-function badInput(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

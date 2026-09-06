@@ -5,20 +5,13 @@
     "catalogOnly": "僅供目錄查閱",
     "clear": "清除",
     "close": "關閉",
-    "connected": "已連線",
-    "copied": "已複製 {{label}}",
-    "copy": "複製 {{label}}",
     "credential": "憑證",
     "currentSelection": "目前選取項目",
-    "docs": "文件",
     "failed": "失敗",
     "loadingRuntimeData": "正在載入執行階段資料...",
     "local": "本機",
     "noAuth": "無須驗證",
-    "notConnected": "尚未連線",
-    "open": "開啟",
     "refresh": "重新整理",
-    "required": "必填",
     "runtimeReady": "執行階段已就緒",
     "showMore": "顯示更多",
     "showing": "顯示 {{shown}} / {{total}}",
@@ -40,6 +33,8 @@
   "nav": {
     "overview": "總覽",
     "providers": "服務提供者",
+    "marketplace": "Marketplace",
+    "oauthApps": "OAuth Apps",
     "actions": "動作",
     "runs": "執行記錄",
     "access": "API 金鑰",
@@ -60,28 +55,26 @@
     },
     "headings": {
       "overview": {
-        "title": "總覽",
-        "subtitle": "執行階段狀態與健康情形。"
+        "title": "總覽"
       },
       "providers": {
-        "title": "服務提供者",
-        "subtitle": "連線至服務提供者並檢視其功能。"
+        "title": "服務提供者"
+      },
+      "marketplace": { "title": "Marketplace" },
+      "oauthApps": {
+        "title": "OAuth Apps"
       },
       "actions": {
-        "title": "動作",
-        "subtitle": "搜尋、檢視及偵錯本機執行階段動作。"
+        "title": "動作"
       },
       "runs": {
-        "title": "執行記錄",
-        "subtitle": "近期的本機動作執行記錄。"
+        "title": "執行記錄"
       },
       "access": {
-        "title": "API 金鑰",
-        "subtitle": "管理供 Agent 與用戶端使用的執行階段 API 權杖。"
+        "title": "API 金鑰"
       },
       "resources": {
-        "title": "資源",
-        "subtitle": "產生的 API 參考文件與工具中繼資料。"
+        "title": "資源"
       }
     }
   },
@@ -95,7 +88,6 @@
     "capabilityStatus": "功能狀態",
     "metrics": {
       "providers": "服務提供者",
-      "actions": "動作",
       "executable": "可執行",
       "runHealth": "執行健康情形"
     },
@@ -106,8 +98,6 @@
     "unavailable": "無法使用",
     "needsAttention": "需要注意",
     "recentFailures": "近期失敗",
-    "noFailedRunsTitle": "沒有失敗的執行記錄",
-    "noFailedRunsDescription": "近期的動作執行皆正常。",
     "callTrend": "工具呼叫趨勢",
     "callTrendLegend": "服務",
     "noCallTrendTitle": "尚無呼叫趨勢",
@@ -119,8 +109,71 @@
     "noRecentCallsTitle": "沒有近期呼叫",
     "noRecentCallsDescription": "執行一個動作以查看服務提供者的呼叫次數。"
   },
+  "marketplace": {
+    "summary": {
+      "title": "Connector Marketplace",
+      "description": "為目前 Connector 執行環境提供託管的服務存取能力。",
+      "providers": "服務提供者",
+      "actions": "操作"
+    },
+    "status": { "disabled": "未啟用", "available": "可用", "unavailable": "不可用", "auth_error": "驗證失敗" },
+    "pricing": { "free": "免費", "metered": "按量計費" },
+    "configuration": {
+      "title": "連線設定",
+      "description": "將目前執行環境連線到一個 Marketplace discovery endpoint。",
+      "configured": "已設定",
+      "discoveryUrl": "Discovery URL",
+      "discoveryHelp": "儲存時會取得並驗證該 discovery 文件。",
+      "apiKey": "API Key",
+      "apiKeyPlaceholder": "輸入 Marketplace API Key",
+      "keepCurrentKey": "留空以保留目前的 Key",
+      "apiKeyHelp": "設定執行環境加密金鑰後，此值會加密儲存。",
+      "showApiKey": "顯示 API Key",
+      "hideApiKey": "隱藏 API Key",
+      "connect": "連線並驗證",
+      "revalidate": "儲存並重新驗證",
+      "remove": "移除設定",
+      "removeConfirmation": "確定移除 Marketplace 連線？",
+      "confirmRemove": "確認移除"
+    },
+    "providers": {
+      "title": "託管服務提供者",
+      "description": "啟用以虛擬連線形式提供的相容服務。",
+      "count": "{{count}} 個服務提供者",
+      "actionCount": "目錄中有 {{count}} 個操作",
+      "enabled": "已啟用",
+      "disabled": "已停用",
+      "enable": "啟用",
+      "disable": "停用",
+      "emptyTitle": "沒有相容的服務提供者",
+      "emptyDescription": "請連線 action ID 與目前執行環境目錄有交集的 Marketplace。"
+    },
+    "messages": {
+      "saved": "Marketplace 設定已儲存並通過驗證。",
+      "saveFailed": "無法儲存 Marketplace 設定。",
+      "removed": "Marketplace 設定已移除。",
+      "removeFailed": "無法移除 Marketplace 設定。",
+      "providerFailed": "無法更新服務提供者偏好。"
+    }
+  },
   "providers": {
     "catalogTitle": "服務提供者",
+    "viewLabel": "服務提供者檢視",
+    "views": { "manage": "我的連線", "discover": "探索應用程式" },
+    "discovery": {
+      "browseByTask": "依任務瀏覽",
+      "explore": "探索應用程式",
+      "scenarios": {
+        "ai": { "title": "AI 與 Agent", "description": "模型、Agent、搜尋與媒體生成" },
+        "crossBorderEcommerce": { "title": "電商營運", "description": "店面、訂單、履約與市場資料" },
+        "communication": { "title": "團隊協作", "description": "訊息、電子郵件、會議與通知" },
+        "docs": { "title": "文件與知識", "description": "文件、知識庫、雲端硬碟與試算表" },
+        "productivity": { "title": "專案與效率", "description": "專案、工作、行程與自動化" },
+        "marketing": { "title": "行銷與成長", "description": "廣告、內容、潛在客戶與成長資料" },
+        "dataStorage": { "title": "資料與分析", "description": "資料倉儲、資料庫、BI 與儲存" },
+        "developer": { "title": "開發與雲端", "description": "程式碼、部署、雲端服務與可觀測性" }
+      }
+    },
     "brandNotice": "第三方名稱、標誌及商標歸其各自權利人所有，此處僅用於識別對應的服務提供者。本專案不主張擁有相關權利。再散布本專案或將其用於商業用途的使用者，應自行查閱適用的品牌規範，並依其具體用途取得所需許可。",
     "searchPlaceholder": "搜尋服務提供者",
     "statusFilterLabel": "服務提供者狀態",
@@ -130,9 +183,6 @@
       "notConnected": "尚未連線",
       "oauthNeedsConfig": "OAuth 需要設定"
     },
-    "providerMeta": "{{service}} · {{authTypes}} · {{count}} 個動作",
-    "noAuth": "無須驗證",
-    "oauthConfigBadge": "OAuth 設定",
     "noProvidersTitle": "找不到服務提供者",
     "noProvidersDescription": "請嘗試其他搜尋條件或狀態篩選器。",
     "resultCount": "顯示 {{shown}} / {{total}}",
@@ -142,9 +192,12 @@
     "providerNotFoundDescription": "{{service}} 與目前的目錄不符。",
     "backToProviders": "返回服務提供者",
     "providerHomepage": "首頁",
-    "selectProviderTitle": "選取服務提供者",
-    "selectProviderDescription": "選取服務提供者以檢視連線設定。",
-    "connectedBy": "透過 {{authType}} 連線",
+    "marketplaceBadge": "託管",
+    "marketplaceConnection": {
+      "title": "Marketplace 託管連線",
+      "description": "操作可使用由 {{name}} 託管的憑證執行。",
+      "manage": "管理 Marketplace"
+    },
     "configuredBadge": "已設定",
     "noSetupBadge": "無須設定",
     "unconfiguredBadge": "尚未連線",
@@ -152,14 +205,6 @@
     "runtimeUnavailableBadge": "無法使用",
     "runtimeUnavailableTitle": "無法在此執行階段使用",
     "runtimeUnavailableDescription": "{{name}} 仍會顯示供目錄查閱，但目前的執行階段無法使用其連線與動作。",
-    "summary": {
-      "actions": "動作",
-      "auth": "驗證",
-      "oauthConfig": "OAuth 設定",
-      "configured": "已設定",
-      "required": "必要",
-      "notUsed": "未使用"
-    },
     "connection": "連線",
     "connectionCount": "{{count}} 個連線",
     "savedConnections": "已儲存的連線",
@@ -173,6 +218,11 @@
       "duplicate": "此名稱已被使用，請選擇現有連線進行更新。"
     },
     "connectionMethod": "連線方式",
+    "oauthAppMode": "OAuth App",
+    "oauthAppModes": {
+      "configured": "預設 App",
+      "manual": "自訂 App"
+    },
     "connectionDescriptions": {
       "noSetup": "此服務提供者無須本機憑證即可執行。",
       "adding": "設定新的命名連線。",
@@ -184,7 +234,6 @@
     },
     "noConnectionMethodTitle": "無連線方式",
     "noConnectionMethodDescription": "此服務提供者不需要本機憑證。",
-    "oauthClient": "OAuth 用戶端",
     "scopes": "權限範圍",
     "scopesDescription": "此服務提供者的本機動作所要求的權限範圍。",
     "actions": "動作",
@@ -200,6 +249,7 @@
     "connectionMessages": {
       "noAuth": "此服務提供者無須本機憑證即可執行。",
       "needsOAuthClient": "{{name}} 需要本機 OAuth 用戶端才能連線。",
+      "manualOAuthClient": "使用自訂 OAuth App 連線 {{name}}。",
       "connectedOAuth": "{{name}} 已透過 OAuth 連線。",
       "connectOAuth": "透過 {{name}} 的 OAuth 授權流程連線。",
       "saving": "正在儲存連線...",
@@ -213,8 +263,8 @@
       "disconnectFailed": "中斷連線失敗。"
     },
     "buttons": {
-      "configureOAuthClient": "設定 OAuth 用戶端",
-      "editOAuthClient": "編輯 OAuth 用戶端",
+      "configureOAuthClient": "設定預設 App",
+      "editOAuthClient": "編輯預設 App",
       "saveConnection": "儲存連線",
       "addConnection": "新增連線",
       "cancel": "取消",
@@ -226,14 +276,15 @@
       "connectProvider": "連線至 {{name}}",
       "reconnectProvider": "重新連線至 {{name}}",
       "disconnect": "中斷連線",
-      "saveOAuthClient": "儲存 OAuth 用戶端",
-      "updateOAuthClient": "更新 OAuth 用戶端",
-      "resetOAuthClient": "重設 OAuth 用戶端"
+      "saveOAuthClient": "儲存預設 App",
+      "updateOAuthClient": "更新預設 App",
+      "resetOAuthClient": "重設預設 App"
     },
     "oauthClientSettings": {
-      "configuredTitle": "OAuth 用戶端已設定",
-      "requiredTitle": "需要 OAuth 用戶端",
-      "missingDescription": "{{name}} 需要本機 OAuth 用戶端才能連線。",
+      "setupTitle": "建立 OAuth 應用程式",
+      "setupIntro": "在 {{name}} 註冊一個 OAuth 應用程式，然後將其憑證貼到下方。",
+      "setupDocsLink": "開啟 {{name}} 開發者入口網站",
+      "callbackUrl": "Callback URL",
       "clientId": "Client ID",
       "clientSecret": "Client Secret",
       "storedSecretHint": "已儲存的 secret 不會顯示。儲存變更時請再次輸入。",
@@ -247,6 +298,27 @@
     "execution": {
       "executable": "可執行",
       "catalogOnly": "僅供目錄查閱"
+    },
+    "categoryFilterLabel": "分類",
+    "categories": {
+      "all": "所有分類"
+    }
+  },
+  "oauthApps": {
+    "title": "預設 OAuth Apps",
+    "description": "管理各服務提供者預設使用的 OAuth App。",
+    "searchPlaceholder": "搜尋服務提供者",
+    "configured": "已設定",
+    "notConfigured": "未設定",
+    "configure": "設定",
+    "edit": "編輯",
+    "emptyTitle": "沒有 OAuth 服務提供者",
+    "emptyDescription": "目前目錄中沒有支援 OAuth 的服務提供者。",
+    "noResultsTitle": "找不到服務提供者",
+    "noResultsDescription": "請嘗試其他搜尋詞。",
+    "dialog": {
+      "configureTitle": "設定 {{name}} OAuth App",
+      "editTitle": "編輯 {{name}} OAuth App"
     }
   },
   "actions": {
@@ -315,11 +387,10 @@
   },
   "access": {
     "title": "執行階段權杖",
-    "description": "為 /v1 與 MCP 用戶端核發 Bearer 權杖。新權杖僅顯示一次。",
+    "description": "用於 /v1 與 MCP 用戶端驗證。",
     "policy": {
-      "title": "執行階段策略",
-      "description": "控制這個執行階段可以執行哪些操作與提供者代理請求。",
-      "rulesHint": "Block 規則優先；非空 allowlist 會在部署、執行階段與權杖層之間取交集。每行填寫一條規則。",
+      "title": "存取策略",
+      "description": "限制操作與提供者代理請求。",
       "deployment": "部署策略（唯讀）",
       "runtime": "執行階段策略",
       "allowedActions": "允許的操作",
@@ -330,7 +401,6 @@
       "saving": "正在儲存策略...",
       "saved": "策略已儲存。",
       "saveFailed": "儲存策略失敗。",
-      "unrestricted": "沒有權杖專屬限制",
       "edit": "編輯策略",
       "editToken": "編輯權杖策略",
       "baseline": {
@@ -380,7 +450,7 @@
         "none": "無規則"
       },
       "runtimeSummary": {
-        "title": "執行階段策略設定",
+        "title": "執行階段策略",
         "updated": "最後更新於 {{date}}",
         "edit": "編輯策略"
       },
@@ -389,8 +459,10 @@
         "restricted": "允許規則 {{count}} 條",
         "withBlocked": "{{allow}} · 始終阻止 {{count}} 條"
       },
-      "layerSummary": "操作：{{action}} · 提供商代理請求：{{proxy}}",
+      "layerSummary": "操作：{{action}} · 代理：{{proxy}}",
       "tokenSummary": "操作允許規則 {{allowed}} 條 · 操作阻止規則 {{blocked}} 條 · Proxy 授權 {{proxies}} 條 · 仍受執行階段基準限制",
+      "connectionsUnrestricted": "全部連線",
+      "connectionsRestricted": "連線：{{names}}",
       "editor": {
         "title": "編輯執行階段策略",
         "description": "儲存前會結合部署約束預覽修改影響。",
@@ -434,9 +506,16 @@
         "noRules": "這個清單中暫無規則。",
         "actionAllowRequired": "請至少新增一條操作允許規則，或選擇不額外限制。",
         "proxyAllowRequired": "請至少新增一條提供商允許規則，或選擇不額外限制。",
-        "tokenHint": "操作規則與 Proxy 授權彼此獨立。Proxy 授權清單為空時，權杖不能傳送提供商代理請求。",
-        "discard": "放棄修改",
-        "preview": "預覽影響"
+        "connectionsTitle": "連線存取",
+        "connectionsUnrestrictedHint": "此權杖可以使用任何已儲存的連線；請求未指定名稱時使用 default。",
+        "connectionsRestrictedHint": "此權杖只能使用下方選取的提供商連線。",
+        "connectionsList": "允許的連線",
+        "connectionsRequired": "請至少選取一個連線，或選擇不額外限制。",
+        "tooManyConnections": "連線清單最多包含 128 個連線。",
+        "connectionCount": "{{count}} 個連線",
+        "noConnections": "這個清單中暫無連線。",
+        "connectionsDefaultHint": "選取某個提供商的 default 連線後，權杖才能執行該提供商未指定連線名稱的 HTTP、MCP 或代理請求。",
+        "discard": "放棄修改"
       },
       "impact": {
         "title": "草稿影響",
@@ -471,8 +550,8 @@
     "copiedToken": "已複製",
     "copyRuntimeToken": "複製執行階段權杖",
     "copiedRuntimeToken": "已複製執行階段權杖",
-    "noTokensTitle": "尚無執行階段權杖",
-    "noTokensDescription": "連線 MCP 用戶端或本機指令碼前，請先建立權杖。權杖僅顯示一次。",
+    "noTokensTitle": "尚無權杖",
+    "noTokensDescription": "建立權杖後即可存取 /v1 或 MCP。",
     "table": {
       "name": "名稱",
       "status": "狀態",

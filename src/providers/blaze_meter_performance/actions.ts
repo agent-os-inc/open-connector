@@ -2,7 +2,7 @@ import type { ActionDefinition, JsonSchema } from "../../core/types.ts";
 
 import { s } from "../../core/json-schema.ts";
 import { defineProviderAction } from "../../core/provider-definition.ts";
-import { blazeMeterResponseEnvelopeSchema, blazeMeterSortSchema } from "../blaze-meter-schemas.ts";
+import { blazeMeterResponseEnvelopeSchema, blazeMeterSortSchema } from "./shared-schemas.ts";
 
 const service = "blaze_meter_performance";
 
@@ -49,14 +49,6 @@ const listTestsInputSchema: JsonSchema = s.object(
   { optional: ["workspaceId", "projectId", "skip", "limit", "sort"] },
 );
 listTestsInputSchema.anyOf = [{ required: ["workspaceId"] }, { required: ["projectId"] }];
-
-export type BlazeMeterPerformanceActionName =
-  | "get_user"
-  | "list_accounts"
-  | "list_workspaces"
-  | "list_projects"
-  | "list_tests"
-  | "get_test";
 
 export const blazeMeterPerformanceActions: ActionDefinition[] = [
   defineProviderAction(service, {

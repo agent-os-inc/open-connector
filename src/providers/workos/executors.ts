@@ -1,8 +1,8 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext, ProviderRuntimeHandler } from "../provider-runtime.ts";
-import type { WorkosActionName } from "./actions.ts";
 
-import { compactObject, optionalBoolean, optionalRecord, optionalString } from "../../core/cast.ts";
+import { compactObject, looseArray, optionalBoolean, optionalRecord, optionalString } from "../../core/cast.ts";
 import { encodePathSegment } from "../../core/request.ts";
 import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
 
@@ -11,7 +11,7 @@ const workosApiBaseUrl = "https://api.workos.com";
 
 type WorkosActionHandler = ProviderRuntimeHandler<ApiKeyProviderContext>;
 
-export const workosActionHandlers: Record<WorkosActionName, WorkosActionHandler> = {
+export const workosActionHandlers: ProviderActionHandlers<"workos", WorkosActionHandler> = {
   list_users(input, context) {
     return executeListAction(
       "/user_management/users",
@@ -147,7 +147,7 @@ async function executeListAction(
     phase: "execute",
   });
   return {
-    [listKey]: readArray(payload.data),
+    [listKey]: looseArray(payload.data),
     list_metadata: optionalRecord(payload.list_metadata) ?? {},
     raw: payload,
   };
@@ -335,8 +335,4 @@ function buildOrganizationMembershipBody(input: Record<string, unknown>): Record
 
 function readWrappedObject(payload: Record<string, unknown>, wrapperKey: string): Record<string, unknown> {
   return optionalRecord(payload[wrapperKey]) ?? payload;
-}
-
-function readArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
 }

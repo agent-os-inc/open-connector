@@ -6,14 +6,20 @@ import type { Logger } from "./logger.ts";
 import type { ISecretCodec } from "./secrets/secret-codec-core.ts";
 
 import { ActionPolicyService, parseActionPolicyList } from "../core/action-policy.ts";
-import { parsePrivateNetworkAccessFlag, setPrivateNetworkAccessAllowed } from "../core/request.ts";
+import { PromiseCache } from "../core/promise-cache.ts";
+import {
+  parseEgressTrustedHosts,
+  parsePrivateNetworkAccessFlag,
+  setEgressTrustedHosts,
+  setPrivateNetworkAccessAllowed,
+} from "../core/request.ts";
 import { ProviderLoader } from "../providers/provider-loader.ts";
 import { executorModules } from "../providers/registry.cloudflare.generated.ts";
 import { isConsoleShellPath } from "./api/console-paths.ts";
 import { loadCatalogFromAssets } from "./cloudflare/catalog-assets.ts";
 import { readPositiveInteger, resolvePublicOrigin } from "./cloudflare/cloudflare-env.ts";
-import { IsolatePromiseCache } from "./cloudflare/isolate-promise-cache.ts";
 import { createConnectApp } from "./connect-app.ts";
+import { preloadOptionalServerModules } from "./connect-server.ts";
 import { KVTransitFileService } from "./files/kv-transit-files.ts";
 import { R2TransitFileService } from "./files/r2-transit-files.ts";
 import { createWorkerSecretCodec } from "./secrets/worker-secret-codec.ts";
@@ -25,13 +31,14 @@ interface CloudflareExecutionContext {
   passThroughOnException(): void;
 }
 
-const catalogCache = new IsolatePromiseCache<CatalogStore>();
-const secretCodecCache = new IsolatePromiseCache<ISecretCodec>();
-const appCache = new IsolatePromiseCache<ConnectApp>();
+const catalogCache = new PromiseCache<CatalogStore>();
+const secretCodecCache = new PromiseCache<ISecretCodec>();
+const appCache = new PromiseCache<ConnectApp>();
 
 export default {
   async fetch(request: Request, env: CloudflareEnv, _ctx: CloudflareExecutionContext): Promise<Response> {
     setPrivateNetworkAccessAllowed(parsePrivateNetworkAccessFlag(env.OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK));
+    setEgressTrustedHosts(parseEgressTrustedHosts(env.OOMOL_CONNECT_EGRESS_TRUSTED_HOSTS));
     const publicOrigin = resolvePublicOrigin(request, env);
     const { app } = await appCache.get(createCacheKey(env, publicOrigin), () => createCloudflareApp(env, publicOrigin));
     const response = await app.fetch(request, env);
@@ -48,6 +55,10 @@ async function createCloudflareApp(env: CloudflareEnv, publicOrigin: string): Pr
   if (!assets) {
     throw new Error("Cloudflare ASSETS binding is required to load the catalog");
   }
+  // The Node server defers the MCP and docs modules to their first request so its startup graph stays small.
+  // Workers keep paying their evaluation here, at app creation, so the first /mcp or /docs request of an isolate
+  // is served the same way as every later one.
+  await preloadOptionalServerModules();
   const secretCodec = await createSecretCodec(env.OOMOL_CONNECT_ENCRYPTION_KEY);
   return await createConnectApp({
     catalog: await loadCatalogOnce(assets),
@@ -82,6 +93,7 @@ async function createCloudflareApp(env: CloudflareEnv, publicOrigin: string): Pr
       allowedProxies: parseActionPolicyList(env.OOMOL_CONNECT_ALLOWED_PROXIES),
       blockedProxies: parseActionPolicyList(env.OOMOL_CONNECT_BLOCKED_PROXIES),
     }),
+    allowedCustomOAuth: parseActionPolicyList(env.OOMOL_CONNECT_ALLOWED_CUSTOM_OAUTH),
     logger: workerLogger,
     computeRuntimeAuthConfigured: false,
     // Cloudflare compresses on egress itself: Response defaults to
@@ -138,6 +150,7 @@ function createCacheKey(env: CloudflareEnv, publicOrigin: string): string {
     blockedActions: env.OOMOL_CONNECT_BLOCKED_ACTIONS ?? "",
     allowedProxies: env.OOMOL_CONNECT_ALLOWED_PROXIES ?? "",
     blockedProxies: env.OOMOL_CONNECT_BLOCKED_PROXIES ?? "",
+    allowedCustomOAuth: env.OOMOL_CONNECT_ALLOWED_CUSTOM_OAUTH ?? "",
     transitFileTtlSeconds: env.OOMOL_CONNECT_TRANSIT_FILE_TTL_SECONDS ?? "",
     transitFileMaxBytes: env.OOMOL_CONNECT_TRANSIT_FILE_MAX_BYTES ?? "",
     runLimit: env.OOMOL_CONNECT_RUN_LIMIT ?? "",

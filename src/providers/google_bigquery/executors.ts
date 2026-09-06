@@ -1,14 +1,15 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { OAuthProviderContext } from "../provider-runtime.ts";
-import type { GoogleBigQueryActionName } from "./actions.ts";
 
 import {
+  booleanString,
   compactObject,
   optionalBoolean,
   optionalInteger as asOptionalInteger,
   requiredRecord,
 } from "../../core/cast.ts";
-import { googleJsonRequest, googleRequest } from "../googledrive/runtime-shared.ts";
+import { googleJsonRequest, googleRequest } from "../google-runtime.ts";
 import { defineOAuthProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
 
 const bigQueryApiBaseUrl = "https://bigquery.googleapis.com/bigquery/v2";
@@ -20,7 +21,7 @@ type GoogleBigQueryActionHandler = (
   context: GoogleBigQueryRuntimeDeps,
 ) => Promise<unknown>;
 
-export const googleBigQueryActionHandlers: Record<GoogleBigQueryActionName, GoogleBigQueryActionHandler> = {
+export const googleBigQueryActionHandlers: ProviderActionHandlers<"google_bigquery", GoogleBigQueryActionHandler> = {
   list_projects: listProjects,
   list_datasets: listDatasets,
   get_dataset: getDataset,
@@ -104,7 +105,7 @@ async function listDatasets(input: Record<string, unknown>, context: GoogleBigQu
   const payload = await googleBigQueryJsonRequest(`${bigQueryApiBaseUrl}/projects/${projectId}/datasets`, {
     context,
     query: compactObject({
-      all: optionalBooleanString(input.all),
+      all: booleanString(input.all),
       filter: optionalNonEmptyString(input.filter),
       maxResults: optionalScalarString(input.maxResults),
       pageToken: optionalNonEmptyString(input.pageToken),
@@ -270,7 +271,7 @@ async function listJobs(input: Record<string, unknown>, context: GoogleBigQueryR
   const payload = await googleBigQueryJsonRequest(`${bigQueryApiBaseUrl}/projects/${projectId}/jobs`, {
     context,
     query: compactObject({
-      allUsers: optionalBooleanString(input.allUsers),
+      allUsers: booleanString(input.allUsers),
       maxResults: optionalScalarString(input.maxResults),
       pageToken: optionalNonEmptyString(input.pageToken),
       projection: optionalUppercaseString(input.projection),
@@ -1180,10 +1181,6 @@ function optionalScalarString(value: unknown) {
     return undefined;
   }
   return String(value);
-}
-
-function optionalBooleanString(value: unknown) {
-  return typeof value === "boolean" ? String(value) : undefined;
 }
 
 function optionalTrueString(value: unknown) {

@@ -4,14 +4,15 @@ import type {
   ProviderExecutors,
   ProviderProxyExecutor,
 } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { TelegramActionName } from "./actions.ts";
 
 import { optionalBoolean, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
 import { assertPublicHttpUrl } from "../../core/request.ts";
 import {
   defineApiKeyProviderExecutors,
   defineProviderProxy,
+  isAbortLikeError,
   ProviderRequestError,
   requireApiKeyCredential,
 } from "../provider-runtime.ts";
@@ -32,7 +33,7 @@ interface TelegramApiEnvelope<T> {
 
 type TelegramActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const telegramActionHandlers: Record<TelegramActionName, TelegramActionHandler> = {
+export const telegramActionHandlers: ProviderActionHandlers<"telegram", TelegramActionHandler> = {
   async get_me(_input, context): Promise<unknown> {
     return normalizeTelegramUser(
       await telegramRequest<Record<string, unknown>>({
@@ -1368,8 +1369,4 @@ function assertValidTelegramBotToken(botToken: string): void {
   if (botToken.length === 0 || /[/?#\s]/u.test(botToken)) {
     throw new ProviderRequestError(400, "telegram bot token is malformed");
   }
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }

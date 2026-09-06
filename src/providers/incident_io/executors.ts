@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { IncidentIoActionName } from "./actions.ts";
 
 import { compactObject, optionalInteger, optionalRecord, optionalString, stringArray } from "../../core/cast.ts";
 import {
@@ -13,7 +13,6 @@ import {
 
 const service = "incident_io";
 const incidentIoApiBaseUrl = "https://api.incident.io";
-const requestTimeoutMs = 30_000;
 
 type RequestPhase = "validate" | "execute";
 type IncidentIoActionContext = Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">;
@@ -25,7 +24,7 @@ interface IncidentIoRequestInput {
   phase: RequestPhase;
 }
 
-export const incidentIoActionHandlers: Record<IncidentIoActionName, IncidentIoActionHandler> = {
+export const incidentIoActionHandlers: ProviderActionHandlers<"incident_io", IncidentIoActionHandler> = {
   list_incidents(input, context) {
     return listIncidents(input, context);
   },
@@ -190,7 +189,7 @@ function buildListIncidentsQuery(input: Record<string, unknown>): Record<string,
 }
 
 async function requestJson(input: IncidentIoRequestInput, context: IncidentIoActionContext): Promise<unknown> {
-  const timeout = createProviderTimeout(context.signal, requestTimeoutMs);
+  const timeout = createProviderTimeout(context.signal);
   try {
     const response = await context.fetcher(buildUrl(input.path, input.query), {
       method: "GET",

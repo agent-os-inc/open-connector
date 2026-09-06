@@ -1,5 +1,5 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
-import type { VitallyActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { Buffer } from "node:buffer";
 import { compactObject, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
@@ -14,7 +14,6 @@ import {
 
 const service = "vitally";
 const vitallyEuBaseUrl = "https://rest.vitally-eu.io";
-const vitallyRequestTimeoutMs = 30_000;
 
 type VitallyRegion = "us" | "eu";
 type VitallyRequestPhase = "validate" | "execute";
@@ -36,7 +35,7 @@ interface VitallyRequestOptions extends VitallyActionContext {
   searchParams?: URLSearchParams;
 }
 
-export const vitallyActionHandlers: Record<VitallyActionName, VitallyActionHandler> = {
+export const vitallyActionHandlers: ProviderActionHandlers<"vitally", VitallyActionHandler> = {
   list_accounts(input, context) {
     return listAccounts(input, context);
   },
@@ -189,7 +188,7 @@ async function deleteAccount(input: Record<string, unknown>, context: VitallyAct
 }
 
 async function requestVitally(input: VitallyRequestOptions): Promise<unknown> {
-  const timeout = createProviderTimeout(input.signal, vitallyRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.signal);
   try {
     const url = new URL(input.path, input.baseUrl);
     if (input.searchParams) {

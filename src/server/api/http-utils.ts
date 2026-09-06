@@ -8,6 +8,7 @@ export type JsonRequestBody = {
   values?: Record<string, unknown>;
   clientId?: unknown;
   clientSecret?: unknown;
+  requestedScopes?: unknown;
   extra?: unknown;
   [key: string]: unknown;
 };
@@ -21,7 +22,7 @@ export type JsonRequestBody = {
  */
 export async function readJsonBody(context: Context, maxBytes?: number): Promise<JsonRequestBody> {
   const contentType = context.req.header("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
+  if (!contentType.toLowerCase().includes("application/json")) {
     return {};
   }
 
@@ -103,13 +104,6 @@ export function notFound(context: Context): Response {
  */
 export function internalError(context: Context, _error: unknown): Response {
   return jsonError(context, 500, "internal_error", "Internal server error.");
-}
-
-/**
- * Escape plain text for the tiny OAuth callback completion page.
- */
-export function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 export class HttpRequestError extends Error {

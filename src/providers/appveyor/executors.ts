@@ -1,9 +1,11 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { compactObject, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
+  providerInputError,
   ProviderRequestError,
   providerUserAgent,
   requireApiKeyCredential,
@@ -21,7 +23,7 @@ interface AppveyorActionContext extends ApiKeyProviderContext {
 
 type AppveyorActionHandler = (input: Record<string, unknown>, context: AppveyorActionContext) => Promise<unknown>;
 
-export const appveyorActionHandlers: Record<string, AppveyorActionHandler> = {
+export const appveyorActionHandlers: ProviderActionHandlers<"appveyor", AppveyorActionHandler> = {
   async get_projects(input, context) {
     const projects = await appveyorGetJson({
       context,
@@ -99,7 +101,7 @@ export const appveyorActionHandlers: Record<string, AppveyorActionHandler> = {
     const artifacts = await appveyorGetJson({
       context,
       accountName: resolveAccountName(input, context),
-      path: `/buildjobs/${encodeURIComponent(requiredString(input.jobId, "jobId", invalidInputError))}/artifacts`,
+      path: `/buildjobs/${encodeURIComponent(requiredString(input.jobId, "jobId", providerInputError))}/artifacts`,
       phase: "execute",
     });
 
@@ -305,8 +307,4 @@ function readOptionalNonEmptyString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
-}
-
-function invalidInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

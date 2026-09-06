@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { OpencageActionName } from "./actions.ts";
 
 import {
   compactObject,
@@ -14,6 +14,7 @@ import { queryFlag } from "../../core/request.ts";
 import {
   defineApiKeyProviderExecutors,
   ProviderRequestError,
+  providerResponseError,
   providerUserAgent,
   setSearchParams,
 } from "../provider-runtime.ts";
@@ -24,7 +25,7 @@ const opencageApiBaseUrl = "https://api.opencagedata.com";
 type OpencagePhase = "validate" | "execute";
 type OpencageActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const opencageActionHandlers: Record<OpencageActionName, OpencageActionHandler> = {
+export const opencageActionHandlers: ProviderActionHandlers<"opencage", OpencageActionHandler> = {
   geocode_forward(input, context) {
     return opencageRequest("json", asForwardQuery(input), context, "execute");
   },
@@ -54,7 +55,7 @@ export const credentialValidators: CredentialValidators = {
         "validate",
       ),
       "OpenCage payload",
-      providerError,
+      providerResponseError,
     );
     const rate = optionalRecord(payload.rate);
 
@@ -202,10 +203,6 @@ function readRequiredString(value: unknown, fieldName: string): string {
 function integerParam(value: unknown): string | undefined {
   const parsed = optionalInteger(value);
   return parsed === undefined ? undefined : String(parsed);
-}
-
-function providerError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
 }
 
 function isAbortError(error: unknown): boolean {

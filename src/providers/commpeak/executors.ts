@@ -1,8 +1,10 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import {
   compactObject,
+  looseArray,
   optionalNumber,
   optionalRecord,
   optionalString,
@@ -13,6 +15,7 @@ import {
 import {
   createProviderTimeout,
   defineApiKeyProviderExecutors,
+  providerInputError,
   providerUserAgent,
   ProviderRequestError,
   readProviderTextBody,
@@ -20,7 +23,6 @@ import {
 
 const service = "commpeak";
 const commpeakTextPeakBaseUrl = "https://gw.commpeak.com/textpeak";
-const commpeakRequestTimeoutMs = 30_000;
 const commpeakMaxResponseBytes = 10 * 1024 * 1024;
 
 type CommpeakActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
@@ -30,7 +32,7 @@ interface CommpeakRequestOptions {
   readonly signal?: AbortSignal;
 }
 
-const commpeakActionHandlers: Record<string, CommpeakActionHandler> = {
+const commpeakActionHandlers: ProviderActionHandlers<"commpeak", CommpeakActionHandler> = {
   list_streams(input, context) {
     return executeListStreams(input, context);
   },
@@ -93,12 +95,12 @@ async function executeListStreams(input: Record<string, unknown>, context: ApiKe
     signal: context.signal,
   });
   return {
-    streams: readArray(payload).map(normalizeStream),
+    streams: looseArray(payload).map(normalizeStream),
   };
 }
 
 async function executeGetStream(input: Record<string, unknown>, context: ApiKeyProviderContext) {
-  const streamId = positiveInteger(input.streamId, "streamId", invalidInput);
+  const streamId = positiveInteger(input.streamId, "streamId", providerInputError);
   const payload = await commpeakGetJson(`/streams/${streamId}`, context.apiKey, context.fetcher, undefined, {
     signal: context.signal,
   });
@@ -108,7 +110,7 @@ async function executeGetStream(input: Record<string, unknown>, context: ApiKeyP
 }
 
 async function executeGetStreamToken(input: Record<string, unknown>, context: ApiKeyProviderContext) {
-  const streamId = positiveInteger(input.streamId, "streamId", invalidInput);
+  const streamId = positiveInteger(input.streamId, "streamId", providerInputError);
   const token = await getStreamToken(streamId, context);
   return { token };
 }
@@ -118,7 +120,7 @@ async function executeListSenders(input: Record<string, unknown>, context: ApiKe
     signal: context.signal,
   });
   return {
-    senders: readArray(payload).map(normalizeSender),
+    senders: looseArray(payload).map(normalizeSender),
   };
 }
 
@@ -127,7 +129,7 @@ async function executeListDomains(input: Record<string, unknown>, context: ApiKe
     signal: context.signal,
   });
   return {
-    domains: readArray(payload).map(normalizeDomain),
+    domains: looseArray(payload).map(normalizeDomain),
   };
 }
 
@@ -185,9 +187,9 @@ async function executeListIncomingMessages(input: Record<string, unknown>, conte
 }
 
 async function executeSendSms(input: Record<string, unknown>, context: ApiKeyProviderContext) {
-  const streamId = positiveInteger(input.streamId, "streamId", invalidInput);
+  const streamId = positiveInteger(input.streamId, "streamId", providerInputError);
   const sender = optionalString(input.sender);
-  const messages = readArray(input.messages).map((message) => {
+  const messages = looseArray(input.messages).map((message) => {
     const item = requireResponseObject(message);
     return compactObject({
       internal_id: optionalString(item.internalId),
@@ -197,7 +199,7 @@ async function executeSendSms(input: Record<string, unknown>, context: ApiKeyPro
     });
   });
   if (!sender && messages.some((message) => !message.sender)) {
-    throw invalidInput("sender is required on every message when top-level sender is omitted");
+    throw providerInputError("sender is required on every message when top-level sender is omitted");
   }
 
   const streamToken = await getStreamToken(streamId, context);
@@ -216,7 +218,7 @@ async function executeSendSms(input: Record<string, unknown>, context: ApiKeyPro
   return {
     status: object.status === true,
     taskId: nullableString(object.task_id),
-    messages: readArray(object.messages).map(normalizeSmsSendMessageResult),
+    messages: looseArray(object.messages).map(normalizeSmsSendMessageResult),
     raw: object,
   };
 }
@@ -287,7 +289,7 @@ async function commpeakRequestJson(
   fetcher: typeof fetch,
   options: CommpeakRequestOptions = {},
 ) {
-  const timeout = createProviderTimeout(options.signal, commpeakRequestTimeoutMs);
+  const timeout = createProviderTimeout(options.signal);
   try {
     const response = await fetcher(url, { ...init, signal: timeout.signal });
     const payload = await readCommpeakPayload(response);
@@ -380,13 +382,9 @@ function listParams(input: Record<string, unknown>) {
   });
 }
 
-function readArray(value: unknown) {
-  return Array.isArray(value) ? value : [];
-}
-
 function readPage(payload: unknown) {
   const object = optionalRecord(payload);
-  const items = readArray(object?.items);
+  const items = looseArray(object?.items);
   const totalItems = nullableNumber(object?.totalItems ?? object?.total_items ?? object?.total);
   return { items, totalItems };
 }
@@ -402,7 +400,7 @@ function normalizeStream(value: unknown) {
     callerId: nullableString(object.callerId),
     ipAcl: nullableString(object.ipAcl),
     state: nullableString(object.state),
-    streamTags: readArray(object.streamTags).map(normalizeStreamTag),
+    streamTags: looseArray(object.streamTags).map(normalizeStreamTag),
     raw: object,
   };
 }
@@ -508,8 +506,4 @@ function requireResponseObject(value: unknown): Record<string, unknown> {
 
 function nullableNumber(value: unknown): number | null {
   return optionalNumber(value) ?? null;
-}
-
-function invalidInput(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

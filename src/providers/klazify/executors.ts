@@ -1,6 +1,6 @@
 import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { KlazifyActionName } from "./actions.ts";
 
 import {
   compactObject,
@@ -11,16 +11,14 @@ import {
   optionalString,
 } from "../../core/cast.ts";
 import {
-  createProviderTimeout,
   defineApiKeyProviderExecutors,
-  isAbortLikeError,
   providerUserAgent,
   ProviderRequestError,
+  runProviderRequest,
 } from "../provider-runtime.ts";
 
 const service = "klazify";
 const klazifyApiBaseUrl = "https://www.klazify.com/api";
-const klazifyDefaultRequestTimeoutMs = 30_000;
 
 type KlazifyPhase = "validate" | "execute";
 type KlazifyActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
@@ -37,7 +35,7 @@ interface NormalizedKlazifyResponse {
   raw: Record<string, unknown>;
 }
 
-export const klazifyActionHandlers: Record<KlazifyActionName, KlazifyActionHandler> = {
+export const klazifyActionHandlers: ProviderActionHandlers<"klazify", KlazifyActionHandler> = {
   categorize_url(input, context) {
     return runKlazifyLookup({
       input,
@@ -243,9 +241,7 @@ async function requestKlazifyJson(input: {
   signal?: AbortSignal;
   phase: KlazifyPhase;
 }): Promise<Record<string, unknown>> {
-  const timeout = createProviderTimeout(input.signal, klazifyDefaultRequestTimeoutMs);
-
-  try {
+  return runProviderRequest({ signal: input.signal, label: "Klazify" }, async (signal) => {
     const response = await input.fetcher(buildKlazifyUrl(input.path), {
       method: "POST",
       headers: {
@@ -255,7 +251,7 @@ async function requestKlazifyJson(input: {
         "user-agent": providerUserAgent,
       },
       body: JSON.stringify(input.body),
-      signal: timeout.signal,
+      signal,
     });
     const payload = await readKlazifyPayload(response);
 
@@ -268,22 +264,7 @@ async function requestKlazifyJson(input: {
     }
 
     return payload;
-  } catch (error) {
-    if (error instanceof ProviderRequestError) {
-      throw error;
-    }
-
-    if (timeout.didTimeout() || isAbortLikeError(error)) {
-      throw new ProviderRequestError(504, "Klazify request timed out");
-    }
-
-    throw new ProviderRequestError(
-      502,
-      error instanceof Error ? `Klazify request failed: ${error.message}` : "Klazify request failed",
-    );
-  } finally {
-    timeout.cleanup();
-  }
+  });
 }
 
 function buildKlazifyUrl(path: string): URL {

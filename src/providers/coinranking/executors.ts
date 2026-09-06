@@ -1,4 +1,5 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import {
@@ -11,7 +12,13 @@ import {
   requiredString,
 } from "../../core/cast.ts";
 import { queryParams } from "../../core/request.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerInputError,
+  ProviderRequestError,
+  providerResponseError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "coinranking";
 const coinrankingApiBaseUrl = "https://api.coinranking.com/v2";
@@ -19,7 +26,7 @@ const coinrankingApiBaseUrl = "https://api.coinranking.com/v2";
 type CoinrankingRequestPhase = "validate" | "execute";
 type CoinrankingActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const coinrankingActionHandlers: Record<string, CoinrankingActionHandler> = {
+export const coinrankingActionHandlers: ProviderActionHandlers<"coinranking", CoinrankingActionHandler> = {
   search_suggestions(input, context) {
     return searchSuggestions(input, context);
   },
@@ -232,12 +239,4 @@ function buildCoinrankingError(
     return new ProviderRequestError(400, message, payload);
   }
   return new ProviderRequestError(httpStatus >= 400 ? httpStatus : 502, message, payload);
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
-}
-
-function providerResponseError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
 }

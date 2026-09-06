@@ -1,17 +1,14 @@
 import type { CredentialValidationResult, ResolvedCredential } from "../../core/types.ts";
-import type { N8nActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
-import { isIP } from "node:net";
-import {
-  compactObject,
-  optionalBoolean,
-  optionalInteger,
-  optionalRecord,
-  optionalString,
-  requiredString,
-} from "../../core/cast.ts";
+import { compactObject, optionalBoolean, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import { assertPublicHttpUrl, isPrivateNetworkAccessAllowed } from "../../core/request.ts";
-import { providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  providerInputError,
+  providerUserAgent,
+  ProviderRequestError,
+  requiredInputString,
+} from "../provider-runtime.ts";
 
 const n8nValidationPath = "/discover";
 const n8nCredentialHelpUrl = "https://docs.n8n.io/api/authentication/";
@@ -37,7 +34,7 @@ interface N8nRequestOptions {
   notFoundAsInvalidInput?: boolean;
 }
 
-export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
+export const n8nActionHandlers: ProviderActionHandlers<"n8n", N8nActionHandler> = {
   list_workflows(input, context) {
     return requestN8nJson({
       context,
@@ -47,7 +44,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   get_workflow(input, context) {
-    const workflowId = requireInputString(input.workflowId, "workflowId");
+    const workflowId = requiredInputString(input.workflowId, "workflowId");
     return requestN8nJson({
       context,
       path: `/workflows/${encodeURIComponent(workflowId)}`,
@@ -59,7 +56,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   activate_workflow(input, context) {
-    const workflowId = requireInputString(input.workflowId, "workflowId");
+    const workflowId = requiredInputString(input.workflowId, "workflowId");
     return requestN8nJson({
       context,
       path: `/workflows/${encodeURIComponent(workflowId)}/activate`,
@@ -136,26 +133,26 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
       path: "/tags",
       method: "POST",
       body: {
-        name: requireInputString(input.name, "name"),
+        name: requiredInputString(input.name, "name"),
       },
       mode: "execute",
     });
   },
   update_tag(input, context) {
-    const tagId = requireInputString(input.tagId, "tagId");
+    const tagId = requiredInputString(input.tagId, "tagId");
     return requestN8nJson({
       context,
       path: `/tags/${encodeURIComponent(tagId)}`,
       method: "PUT",
       body: {
-        name: requireInputString(input.name, "name"),
+        name: requiredInputString(input.name, "name"),
       },
       mode: "execute",
       notFoundAsInvalidInput: true,
     });
   },
   delete_tag(input, context) {
-    const tagId = requireInputString(input.tagId, "tagId");
+    const tagId = requiredInputString(input.tagId, "tagId");
     return requestN8nJson({
       context,
       path: `/tags/${encodeURIComponent(tagId)}`,
@@ -165,7 +162,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   async get_workflow_tags(input, context) {
-    const workflowId = requireInputString(input.workflowId, "workflowId");
+    const workflowId = requiredInputString(input.workflowId, "workflowId");
     return {
       tags: await requestN8nJson({
         context,
@@ -176,7 +173,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     };
   },
   async update_workflow_tags(input, context) {
-    const workflowId = requireInputString(input.workflowId, "workflowId");
+    const workflowId = requiredInputString(input.workflowId, "workflowId");
     return {
       tags: await requestN8nJson({
         context,
@@ -222,8 +219,8 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
   },
   async create_variable(input, context) {
     const body = compactObject({
-      key: requireInputString(input.key, "key"),
-      value: requireInputString(input.value, "value"),
+      key: requiredInputString(input.key, "key"),
+      value: requiredInputString(input.value, "value"),
       projectId: optionalString(input.projectId),
     });
     const payload = await requestN8nJson({
@@ -236,10 +233,10 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     return withFallbackObject(payload, body);
   },
   async update_variable(input, context) {
-    const variableId = requireInputString(input.variableId, "variableId");
+    const variableId = requiredInputString(input.variableId, "variableId");
     const body = {
-      key: requireInputString(input.key, "key"),
-      value: requireInputString(input.value, "value"),
+      key: requiredInputString(input.key, "key"),
+      value: requiredInputString(input.value, "value"),
     };
     const payload = await requestN8nJson({
       context,
@@ -255,7 +252,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   async delete_variable(input, context) {
-    const variableId = requireInputString(input.variableId, "variableId");
+    const variableId = requiredInputString(input.variableId, "variableId");
     const payload = await requestN8nJson({
       context,
       path: `/variables/${encodeURIComponent(variableId)}`,
@@ -279,7 +276,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
       path: "/data-tables",
       method: "POST",
       body: compactObject({
-        name: requireInputString(input.name, "name"),
+        name: requiredInputString(input.name, "name"),
         columns: requireArray(input.columns, "columns"),
         projectId: optionalString(input.projectId),
       }),
@@ -287,7 +284,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   get_data_table(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}`,
@@ -296,20 +293,20 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   update_data_table(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}`,
       method: "PATCH",
       body: {
-        name: requireInputString(input.name, "name"),
+        name: requiredInputString(input.name, "name"),
       },
       mode: "execute",
       notFoundAsInvalidInput: true,
     });
   },
   async delete_data_table(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     const payload = await requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}`,
@@ -320,7 +317,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     return withFallbackObject(payload, { id: dataTableId });
   },
   list_data_table_columns(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}/columns`,
@@ -329,14 +326,14 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   create_data_table_column(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}/columns`,
       method: "POST",
       body: compactObject({
-        name: requireInputString(input.name, "name"),
-        type: requireInputString(input.type, "type"),
+        name: requiredInputString(input.name, "name"),
+        type: requiredInputString(input.type, "type"),
         index: optionalInteger(input.index),
       }),
       mode: "execute",
@@ -344,8 +341,8 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   update_data_table_column(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
-    const columnId = requireInputString(input.columnId, "columnId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
+    const columnId = requiredInputString(input.columnId, "columnId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}/columns/${encodeURIComponent(columnId)}`,
@@ -359,8 +356,8 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   async delete_data_table_column(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
-    const columnId = requireInputString(input.columnId, "columnId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
+    const columnId = requiredInputString(input.columnId, "columnId");
     const payload = await requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}/columns/${encodeURIComponent(columnId)}`,
@@ -371,7 +368,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     return withFallbackObject(payload, { id: columnId });
   },
   list_data_table_rows(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}/rows`,
@@ -381,7 +378,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   insert_data_table_rows(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}/rows`,
@@ -395,7 +392,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   update_data_table_rows(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}/rows/update`,
@@ -411,7 +408,7 @@ export const n8nActionHandlers: Record<N8nActionName, N8nActionHandler> = {
     });
   },
   upsert_data_table_row(input, context) {
-    const dataTableId = requireInputString(input.dataTableId, "dataTableId");
+    const dataTableId = requiredInputString(input.dataTableId, "dataTableId");
     return requestN8nJson({
       context,
       path: `/data-tables/${encodeURIComponent(dataTableId)}/rows/upsert`,
@@ -493,11 +490,9 @@ export async function validateN8nCredential(
  * form and reject unsafe targets.
  *
  * `allowPrivateNetwork` defaults to the deployment opt-in and may be passed
- * explicitly to pin the policy. With it off, the historical public-only contract
- * applies: https only, plus n8n's public-hostname shape check. With it on, a
- * self-hosted instance may be a plain-HTTP LAN/overlay target, so the shape check
- * is skipped and the shared guard alone decides — loopback, link-local,
- * cloud-metadata, reserved, and IPv6 targets stay blocked either way.
+ * explicitly to pin the policy. With it off, public instances require HTTPS.
+ * With it on, a self-hosted instance may be a plain-HTTP LAN/overlay target.
+ * The shared guard decides which hosts are safe in both modes.
  */
 export function normalizeN8nInstanceUrl(
   input?: string,
@@ -554,7 +549,7 @@ function workflowCommand(
   context: N8nActionContext,
   command: "deactivate" | "archive" | "unarchive",
 ): Promise<unknown> {
-  const workflowId = requireInputString(input.workflowId, "workflowId");
+  const workflowId = requiredInputString(input.workflowId, "workflowId");
   return requestN8nJson({
     context,
     path: `/workflows/${encodeURIComponent(workflowId)}/${command}`,
@@ -770,10 +765,6 @@ function readOptionalStringArray(value: unknown): string[] | undefined {
   return value.filter((item): item is string => typeof item === "string");
 }
 
-function requireInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, providerInputError);
-}
-
 function requireNumberId(value: unknown, fieldName: string): string {
   const parsed = optionalInteger(value);
   if (parsed === undefined) {
@@ -816,12 +807,7 @@ function validatePublicN8nInstanceUrl(instanceUrl: string): void {
  * Apply the shared SSRF egress policy to one n8n URL and return the guard's
  * normalized URL.
  *
- * The public-hostname shape check below is a bespoke guard that predates the
- * deployment opt-in and rejects every private target on its own (IP literals,
- * `.local`/`.internal`, single-label hosts). It must therefore be skipped when
- * private-network access is enabled, or the opt-in would be inert; the shared
- * `assertPublicHttpUrl` policy still blocks loopback, link-local, cloud metadata,
- * reserved ranges, and IPv6 in both modes.
+ * The shared guard validates both the URL literal and its resolved addresses.
  */
 function assertN8nInstanceTarget(value: string, allowPrivateNetwork: boolean): URL {
   const parsed = assertPublicHttpUrl(value, {
@@ -830,9 +816,6 @@ function assertN8nInstanceTarget(value: string, allowPrivateNetwork: boolean): U
     allowPrivateNetwork,
   });
   assertN8nInstanceProtocol(parsed, allowPrivateNetwork);
-  if (!allowPrivateNetwork) {
-    validateN8nPublicHostnameShape(parsed.hostname);
-  }
   return parsed;
 }
 
@@ -846,31 +829,4 @@ function assertN8nInstanceProtocol(url: URL, allowPrivateNetwork: boolean): void
     return;
   }
   throw providerInputError("instanceUrl must use https");
-}
-
-function validateN8nPublicHostnameShape(hostname: string): void {
-  const normalizedHostname = normalizeUrlHostname(hostname);
-  if (
-    normalizedHostname === "localhost" ||
-    normalizedHostname.endsWith(".localhost") ||
-    normalizedHostname.endsWith(".local") ||
-    normalizedHostname.endsWith(".internal") ||
-    normalizedHostname === "0.0.0.0" ||
-    !normalizedHostname.includes(".") ||
-    isIP(normalizedHostname) !== 0
-  ) {
-    throw providerInputError("instanceUrl must use a public hostname");
-  }
-}
-
-function normalizeUrlHostname(hostname: string): string {
-  const lowerHostname = hostname.toLowerCase();
-  if (lowerHostname.startsWith("[") && lowerHostname.endsWith("]")) {
-    return lowerHostname.slice(1, -1);
-  }
-  return lowerHostname;
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

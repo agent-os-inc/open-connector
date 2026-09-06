@@ -1,9 +1,11 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { compactObject, optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
 import {
   defineApiKeyProviderExecutors,
+  defineProviderProxy,
   ProviderRequestError,
   providerUserAgent,
   setSearchParams,
@@ -15,7 +17,7 @@ const urlscanApiBaseUrl = "https://urlscan.io";
 type UrlscanPhase = "validate" | "execute";
 type UrlscanActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const urlscanActionHandlers: Record<string, UrlscanActionHandler> = {
+export const urlscanActionHandlers: ProviderActionHandlers<"urlscan", UrlscanActionHandler> = {
   async submit_scan(input, context) {
     const payload = await requestUrlscanJson({
       context,
@@ -216,3 +218,9 @@ function readObjectArray(value: unknown, fieldName: string): Array<Record<string
     return record;
   });
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: "https://urlscan.io",
+  auth: { type: "api_key_header", name: "api-key" },
+});

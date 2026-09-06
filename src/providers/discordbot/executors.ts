@@ -1,9 +1,16 @@
 import type { CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { Buffer } from "node:buffer";
 import { optionalBoolean, optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
 import { encodePathSegment, jsonObject } from "../../core/request.ts";
-import { defineApiKeyProviderExecutors, defineProviderProxy, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  defineProviderProxy,
+  providerInputError,
+  ProviderRequestError,
+  providerResponseError,
+} from "../provider-runtime.ts";
 
 const service = "discordbot";
 const discordApiBaseUrl = "https://discord.com/api";
@@ -16,7 +23,7 @@ interface DiscordbotContext {
 
 type DiscordbotActionHandler = (input: Record<string, unknown>, context: DiscordbotContext) => Promise<unknown>;
 
-export const discordbotActionHandlers: Record<string, DiscordbotActionHandler> = {
+export const discordbotActionHandlers: ProviderActionHandlers<"discordbot", DiscordbotActionHandler> = {
   test_auth(_input, context) {
     return testAuth(context);
   },
@@ -243,12 +250,4 @@ function assertSingleCursor(input: Record<string, unknown>): void {
 
 function requiredPath(value: unknown, field: string): string {
   return encodePathSegment(requiredString(value, field, providerInputError));
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
-}
-
-function providerResponseError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
 }

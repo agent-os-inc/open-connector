@@ -8,6 +8,7 @@ export const feishuDomainMediaProviderPermissions = {
   documentRead: "docx:document:readonly",
   documentWrite: "docx:document:write_only",
   wikiRead: "wiki:node:read",
+  slidesScreenshot: "slides:presentation:screenshot",
   taskAttachmentWrite: "task:attachment:write",
   okrImageUpload: "okr:okr.progress.file:upload",
   minutesMediaExport: "minutes:minutes.media:export",
@@ -353,12 +354,12 @@ export function createFeishuDomainMediaActions(service: string): readonly Action
     defineProviderAction(service, {
       name: "get_slides_screenshots",
       description: "Render up to ten existing Slides pages and store the decoded screenshots in local transit storage.",
-      requiredScopes: [feishuDomainMediaProviderPermissions.wikiRead],
-      providerPermissions: [feishuDomainMediaProviderPermissions.wikiRead],
+      requiredScopes: [feishuDomainMediaProviderPermissions.slidesScreenshot],
+      providerPermissions: [feishuDomainMediaProviderPermissions.slidesScreenshot],
       inputSchema: s.object(
         "Identify the presentation and select up to ten slides.",
         {
-          ...presentationReference,
+          presentationToken: token,
           slideIds: s.array("Stable slide IDs to render.", token, {
             minItems: 1,
             maxItems: 10,
@@ -369,7 +370,7 @@ export function createFeishuDomainMediaActions(service: string): readonly Action
           }),
         },
         {
-          optional: ["presentationType", "slideIds", "slideNumbers"],
+          optional: ["slideIds", "slideNumbers"],
         },
       ),
       outputSchema: s.object(

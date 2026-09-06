@@ -1,8 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { compactObject, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, ProviderRequestError, providerUserAgent } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  isAbortLikeError,
+  ProviderRequestError,
+  providerUserAgent,
+} from "../provider-runtime.ts";
 
 const service = "apollo";
 const apolloApiBaseUrl = "https://api.apollo.io";
@@ -12,7 +18,7 @@ type ApolloQueryValue = boolean | number | string | string[] | undefined;
 type ApolloRequestPhase = "validate" | "execute";
 type ApolloActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const apolloActionHandlers: Record<string, ApolloActionHandler> = {
+export const apolloActionHandlers: ProviderActionHandlers<"apollo", ApolloActionHandler> = {
   get_api_usage_stats(_input, context) {
     return getApiUsageStats(context);
   },
@@ -383,8 +389,4 @@ function asStringList(value: unknown): string[] | undefined {
 
   const normalized = value.map((item) => optionalString(item)).filter((item): item is string => !!item);
   return normalized.length > 0 ? normalized : undefined;
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
 }

@@ -6,12 +6,16 @@ import { slackConversationTypes, slackNormalizedConversationTypes } from "./cons
 
 const service = "slack";
 
-const nonEmptyString = (description: string): JsonSchema => s.nonEmptyString(description);
-const channelIdSchema = nonEmptyString("The Slack conversation or channel ID.");
-const messageTsSchema = nonEmptyString("The Slack message timestamp, for example '1711.0001'.");
-const userIdSchema = nonEmptyString("The Slack user ID.");
-const fileIdSchema = nonEmptyString("The Slack file ID.");
-
+const channelIdSchema = s.nonEmptyString("The Slack conversation or channel ID.");
+const messageTsSchema = s.nonEmptyString("The Slack message timestamp, for example '1711.0001'.");
+const userIdSchema = s.nonEmptyString("The Slack user ID.");
+const fileIdSchema = s.nonEmptyString("The Slack file ID.");
+const searchSortSchema = s.stringEnum(["score", "timestamp"], {
+  description: "How Slack should sort search results.",
+});
+const sortDirectionSchema = s.stringEnum(["asc", "desc"], {
+  description: "The sort direction for Slack search results.",
+});
 const conversationTypeSchema = s.stringEnum([...slackConversationTypes], {
   description: "A Slack conversation type.",
 });
@@ -50,6 +54,22 @@ const slackMessageSchema = s.looseObject(
   { description: "A Slack message record." },
 );
 
+const searchMessageMatchSchema = s.looseObject(
+  {
+    matchId: s.string({ description: "Slack's search result item identifier." }),
+    channelId: s.string({ description: "The conversation identifier containing the message." }),
+    channelName: s.nullable(s.string({ description: "The conversation name when Slack returns one." })),
+    ts: s.string({ description: "The message timestamp identifier." }),
+    userId: s.string({ description: "The user ID of the message author." }),
+    username: s.string({ description: "The username of the message author when Slack returns one." }),
+    text: s.string({ description: "The matching message text." }),
+    permalink: s.string({ description: "A Slack permalink for the matching message." }),
+    teamId: s.string({ description: "The Slack team ID returned for the match." }),
+    type: s.string({ description: "The Slack result type." }),
+  },
+  { description: "A normalized Slack message search match." },
+);
+
 const conversationSchema = s.object(
   {
     channelId: s.string({ description: "The unique identifier of the conversation." }),
@@ -59,7 +79,7 @@ const conversationSchema = s.object(
     }),
     isArchived: s.nullable(s.boolean({ description: "Whether the conversation is archived." })),
     isPrivate: s.nullable(s.boolean({ description: "Whether the conversation is private." })),
-    isMember: s.nullable(s.boolean({ description: "Whether the bot user is a member." })),
+    isMember: s.nullable(s.boolean({ description: "Whether the connected Slack identity is a member." })),
     memberCount: s.integer({ description: "The member count when Slack provides it." }),
     topic: s.nullable(s.string({ description: "The conversation topic." })),
     purpose: s.nullable(s.string({ description: "The conversation purpose." })),
@@ -130,7 +150,7 @@ const reactionItemSchema = s.unknownObject("A Slack item with reactions.");
 export const slackActions: ActionDefinition[] = [
   action({
     name: "list_channels",
-    description: "List Slack public channels visible to the bot.",
+    description: "List Slack public channels visible to the connected Slack identity.",
     requiredScopes: ["channels:read"],
     inputSchema: s.object(
       {
@@ -163,6 +183,89 @@ export const slackActions: ActionDefinition[] = [
     ),
   }),
   action({
+    name: "search_messages",
+    description:
+      "Search Slack messages visible to the connected user. Supports Slack search modifiers such as in:channel_name and from:<@UserID>.",
+    requiredScopes: ["search:read"],
+    inputSchema: s.object(
+      {
+        query: s.nonEmptyString("The Slack search query."),
+        count: s.integer({
+          minimum: 1,
+          maximum: 100,
+          description: "The number of results to return per page.",
+        }),
+        page: s.integer({ minimum: 1, maximum: 100, description: "The Slack page number to fetch." }),
+        cursor: s.string({
+          description: "The Slack cursor for cursormark pagination. Use '*' for the first request.",
+        }),
+        highlight: s.boolean({ description: "Whether Slack should mark query terms in matching text." }),
+        sort: searchSortSchema,
+        sortDir: sortDirectionSchema,
+        teamId: s.string({ description: "The encoded team ID to search when using an org-level token." }),
+      },
+      { required: ["query"], description: "Input parameters for searching Slack messages." },
+    ),
+    outputSchema: s.object(
+      {
+        query: s.string({ description: "The search query Slack executed." }),
+        matches: s.array(searchMessageMatchSchema, { description: "The matching Slack messages." }),
+        total: s.integer({ description: "The total number of matches Slack reports." }),
+        pagination: s.unknownObject("Slack pagination metadata when returned."),
+        paging: s.unknownObject("Slack legacy paging metadata when returned."),
+        nextCursor: s.nullable(s.string({ description: "The cursor for the next page when Slack returns one." })),
+      },
+      {
+        required: ["query", "matches", "total", "pagination", "paging", "nextCursor"],
+        description: "The output payload for this action.",
+      },
+    ),
+  }),
+  action({
+    name: "search_context",
+    description: "Search Slack messages with the granular Real-time Search API.",
+    requiredScopes: ["search:read.public"],
+    inputSchema: s.object(
+      {
+        query: s.nonEmptyString("The Slack search query."),
+        channelTypes: s.array(
+          s.stringEnum(["public_channel", "private_channel"], {
+            description: "The Slack channel type to search.",
+          }),
+          { minItems: 1, description: "Channel types to search." },
+        ),
+        contextChannelId: s.nonEmptyString("The channel ID used to scope the search when applicable."),
+        cursor: s.string({ description: "The cursor for the next page." }),
+        limit: s.integer({ minimum: 1, maximum: 20, description: "The number of results to return." }),
+        sort: searchSortSchema,
+        sortDir: sortDirectionSchema,
+        before: s.integer({ description: "Only return messages before this UNIX timestamp." }),
+        after: s.integer({ description: "Only return messages after this UNIX timestamp." }),
+        includeContextMessages: s.boolean({ description: "Whether to include surrounding context messages." }),
+        includeBots: s.boolean({ description: "Whether to include messages posted by bots." }),
+        includeMessageBlocks: s.boolean({ description: "Whether to include message blocks in the results." }),
+        highlight: s.boolean({ description: "Whether Slack should highlight matching terms." }),
+        termClauses: s.array(s.nonEmptyString("A search term clause."), {
+          minItems: 1,
+          description: "Search term clauses that every result must match.",
+        }),
+        modifiers: s.string({ description: "Slack search modifiers without free-text terms." }),
+        includeArchivedChannels: s.boolean({ description: "Whether to include archived channels in the search." }),
+        disableSemanticSearch: s.boolean({ description: "Whether to use keyword search without semantic search." }),
+      },
+      { required: ["query"], description: "Input parameters for Slack Real-time Search." },
+    ),
+    outputSchema: s.object(
+      {
+        messages: s.array(s.unknownObject("A Slack Real-time Search message."), {
+          description: "The matching Slack messages.",
+        }),
+        nextCursor: s.nullable(s.string({ description: "The cursor for the next page." })),
+      },
+      { required: ["messages", "nextCursor"], description: "The output payload for Slack Real-time Search." },
+    ),
+  }),
+  action({
     name: "post_message",
     description:
       "Post a Slack message. Use text for plain messages, or blocks for rich Block Kit layouts with text as fallback.",
@@ -177,7 +280,7 @@ export const slackActions: ActionDefinition[] = [
     inputSchema: messageInputSchema(
       "Input parameters for replying to a Slack thread.",
       {
-        threadTs: nonEmptyString("The timestamp of the parent message to reply to."),
+        threadTs: s.nonEmptyString("The timestamp of the parent message to reply to."),
         replyBroadcast: s.boolean({ description: "Whether Slack should also broadcast the reply to the channel." }),
       },
       ["threadTs"],
@@ -191,7 +294,7 @@ export const slackActions: ActionDefinition[] = [
     inputSchema: s.object(
       {
         channelId: channelIdSchema,
-        threadTs: nonEmptyString("The timestamp of the parent message."),
+        threadTs: s.nonEmptyString("The timestamp of the parent message."),
       },
       { required: ["channelId", "threadTs"], description: "Input parameters for reading a Slack thread." },
     ),
@@ -205,7 +308,7 @@ export const slackActions: ActionDefinition[] = [
   }),
   action({
     name: "list_conversations",
-    description: "List Slack conversations visible to the bot.",
+    description: "List Slack conversations visible to the connected Slack identity.",
     requiredScopes: ["channels:read", "groups:read", "im:read", "mpim:read"],
     inputSchema: s.object(
       {
@@ -266,7 +369,7 @@ export const slackActions: ActionDefinition[] = [
   }),
   action({
     name: "list_users",
-    description: "List Slack users visible to the bot.",
+    description: "List Slack users visible to the connected Slack identity.",
     requiredScopes: ["users:read"],
     inputSchema: s.object(
       {
@@ -340,7 +443,7 @@ export const slackActions: ActionDefinition[] = [
   action({
     name: "update_message",
     description:
-      "Update a Slack message posted by the bot. Provide text, blocks, or attachments as the new message content.",
+      "Update a Slack message posted through this connection. Provide text, blocks, or attachments as the new message content.",
     requiredScopes: ["chat:write"],
     inputSchema: messageInputSchema("Input parameters for updating a Slack message.", { messageTs: messageTsSchema }, [
       "messageTs",
@@ -349,7 +452,7 @@ export const slackActions: ActionDefinition[] = [
   }),
   action({
     name: "delete_message",
-    description: "Delete a Slack message posted by the bot.",
+    description: "Delete a Slack message posted through this connection.",
     requiredScopes: ["chat:write"],
     inputSchema: s.object(
       {
@@ -416,13 +519,13 @@ export const slackActions: ActionDefinition[] = [
     requiredScopes: ["files:write"],
     inputSchema: s.object(
       {
-        filename: nonEmptyString("The file name Slack should display."),
+        filename: s.nonEmptyString("The file name Slack should display."),
         fileUrl: s.url("A URL whose response body should be uploaded to Slack."),
         title: s.string({ description: "Optional file title shown in Slack." }),
         channelId: channelIdSchema,
         initialComment: s.string({ description: "Optional message text to post with the file." }),
         threadTs: messageTsSchema,
-        mimeType: nonEmptyString("The content type to send while uploading the file."),
+        mimeType: s.nonEmptyString("The content type to send while uploading the file."),
         altText: s.string({ description: "Alternative text for the uploaded file when Slack supports it." }),
         snippetType: s.string({ description: "Slack snippet type for text snippets." }),
       },
@@ -438,7 +541,7 @@ export const slackActions: ActionDefinition[] = [
   }),
   action({
     name: "list_files",
-    description: "List Slack files visible to the bot, optionally filtered by channel or user.",
+    description: "List Slack files visible to the connected Slack identity, optionally filtered by channel or user.",
     requiredScopes: ["files:read"],
     inputSchema: s.object(
       {
@@ -517,7 +620,7 @@ function reactionInputSchema(description: string): JsonSchema {
     {
       channelId: channelIdSchema,
       messageTs: messageTsSchema,
-      name: nonEmptyString("The emoji reaction name without surrounding colons."),
+      name: s.nonEmptyString("The emoji reaction name without surrounding colons."),
     },
     { required: ["channelId", "messageTs", "name"], description },
   );

@@ -1,5 +1,7 @@
 import type { JsonSchema } from "./types.ts";
 
+const optionalSchemas = new WeakSet<object>();
+
 /**
  * Options shared by primitive JSON Schema helper functions.
  */
@@ -19,6 +21,7 @@ type ObjectOptions = JsonSchemaOptions & {
 type ArrayOptions = JsonSchemaOptions & {
   minItems?: number;
   maxItems?: number;
+  uniqueItems?: boolean;
   itemDescription?: string;
 };
 
@@ -56,7 +59,13 @@ export const jsonSchema = {
         : (optionsOrProperties as ObjectOptions);
     const required =
       options.required ??
-      (options.optional ? Object.keys(properties).filter((key) => !options.optional?.includes(key)) : undefined);
+      (options.optional
+        ? Object.keys(properties).filter(
+            (key) => !options.optional?.includes(key) && !optionalSchemas.has(properties[key]!),
+          )
+        : Object.values(properties).some((schema) => optionalSchemas.has(schema))
+          ? Object.keys(properties).filter((key) => !optionalSchemas.has(properties[key]!))
+          : undefined);
     const schema: JsonSchema = {
       type: "object",
       properties,
@@ -68,7 +77,10 @@ export const jsonSchema = {
   },
 
   requiredObject(description: string, properties: Record<string, JsonSchema>): JsonSchema {
-    return this.object(properties, { required: Object.keys(properties), description });
+    return this.object(properties, {
+      required: Object.keys(properties).filter((key) => !optionalSchemas.has(properties[key]!)),
+      description,
+    });
   },
 
   looseRequiredObject(
@@ -96,6 +108,7 @@ export const jsonSchema = {
     withOptions(schema, options);
     if (options.minItems != null) schema.minItems = options.minItems;
     if (options.maxItems != null) schema.maxItems = options.maxItems;
+    if (options.uniqueItems != null) schema.uniqueItems = options.uniqueItems;
     return schema;
   },
 
@@ -134,8 +147,8 @@ export const jsonSchema = {
     return this.string({ format: "uri", description });
   },
 
-  email(description: string): JsonSchema {
-    return this.string({ format: "email", description });
+  email(description: string, options: Omit<StringOptions, "description" | "format"> = {}): JsonSchema {
+    return this.string({ ...options, format: "email", description });
   },
 
   nullableString(description: string, options: Omit<JsonSchemaOptions, "description"> = {}): JsonSchema {
@@ -231,6 +244,39 @@ export const jsonSchema = {
     return withOptions({ const: value, type: typeof value }, options);
   },
 
+  optional(schema: JsonSchema): JsonSchema {
+    const optionalSchema = { ...schema };
+    optionalSchemas.add(optionalSchema);
+    return optionalSchema;
+  },
+
+  describe(schema: JsonSchema, description: string): JsonSchema {
+    return cloneSchema(schema, { description });
+  },
+
+  withDefault(schema: JsonSchema, defaultValue: unknown): JsonSchema {
+    return cloneSchema(schema, { default: defaultValue });
+  },
+
+  /** Require at least one named property while preserving the base object schema. */
+  requireAnyProperty(schema: JsonSchema, propertyNames: readonly [string, ...string[]]): JsonSchema {
+    return cloneSchema(schema, {
+      anyOf: propertyNames.map((propertyName) => ({ required: [propertyName] })),
+    });
+  },
+
+  tuple(items: JsonSchema[], options: JsonSchemaOptions = {}): JsonSchema {
+    return withOptions(
+      {
+        type: "array",
+        prefixItems: items,
+        minItems: items.length,
+        maxItems: items.length,
+      },
+      options,
+    );
+  },
+
   anyOf(
     schemasOrDescription: JsonSchema[] | string,
     optionsOrSchemas: JsonSchemaOptions | JsonSchema[] = {},
@@ -300,20 +346,11 @@ export const jsonSchema = {
     };
   },
 
-  stringArray(
-    description: string,
-    options: Omit<JsonSchemaOptions, "description"> & {
-      minItems?: number;
-      maxItems?: number;
-      itemDescription?: string;
-    } = {},
-  ): JsonSchema {
-    return this.array(this.string({ minLength: 1, description: options.itemDescription }), {
+  stringArray(description: string, options: Omit<ArrayOptions, "description"> = {}): JsonSchema {
+    const { itemDescription, ...arrayOptions } = options;
+    return this.array(this.string({ minLength: 1, description: itemDescription }), {
+      ...arrayOptions,
       description,
-      minItems: options.minItems,
-      maxItems: options.maxItems,
-      default: options.default,
-      format: options.format,
     });
   },
 
@@ -345,10 +382,50 @@ export const jsonSchema = {
   },
 };
 
+function cloneSchema(schema: JsonSchema, properties: Partial<JsonSchema>): JsonSchema {
+  const clone = { ...schema, ...properties };
+  if (optionalSchemas.has(schema)) optionalSchemas.add(clone);
+  return clone;
+}
+
 /**
  * Short alias for provider schema definitions.
  */
 export const s: typeof jsonSchema = jsonSchema;
+
+/**
+ * Render a schema's value domain as the short type label shown to agents, for
+ * example `string`, `"a" | "b"` for an enum, or the literal for a `const`.
+ */
+export function describeSchemaType(schema: JsonSchema | undefined): string {
+  if (!schema) {
+    return "unknown";
+  }
+  if (schema.const !== undefined) {
+    return JSON.stringify(schema.const);
+  }
+  if (Array.isArray(schema.enum)) {
+    return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
+  }
+  if (Array.isArray(schema.anyOf)) {
+    return schema.anyOf.map((value) => describeSchemaType(value as JsonSchema)).join(" | ");
+  }
+  return typeof schema.type === "string" ? schema.type : "unknown";
+}
+
+/** Read an object schema's `properties` map, tolerating a missing or malformed value (including an array). */
+export function readSchemaProperties(schema: JsonSchema): Record<string, JsonSchema> {
+  return schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
+    ? (schema.properties as Record<string, JsonSchema>)
+    : {};
+}
+
+/** Read an object schema's `required` property names, tolerating a missing or malformed value. */
+export function readSchemaRequired(schema: JsonSchema): string[] {
+  return Array.isArray(schema.required)
+    ? schema.required.filter((value): value is string => typeof value === "string")
+    : [];
+}
 
 function withOptions(schema: JsonSchema, options: JsonSchemaOptions): JsonSchema {
   if (options.description) schema.description = options.description;

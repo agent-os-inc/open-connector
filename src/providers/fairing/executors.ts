@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { FairingActionName } from "./actions.ts";
 
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
@@ -13,13 +13,12 @@ import {
 
 const service = "fairing";
 const fairingApiBaseUrl = "https://app.fairing.co/api";
-const fairingRequestTimeoutMs = 30_000;
 
 type FairingPhase = "validate" | "execute";
 type FairingActionContext = Pick<ApiKeyProviderContext, "apiKey" | "fetcher" | "signal">;
 type FairingActionHandler = (input: Record<string, unknown>, context: FairingActionContext) => Promise<unknown>;
 
-export const fairingActionHandlers: Record<FairingActionName, FairingActionHandler> = {
+export const fairingActionHandlers: ProviderActionHandlers<"fairing", FairingActionHandler> = {
   list_responses(input, context) {
     return listResponses(input, context);
   },
@@ -100,7 +99,7 @@ async function requestFairingJson(input: {
     }
   }
 
-  const timeout = createProviderTimeout(input.context.signal, fairingRequestTimeoutMs);
+  const timeout = createProviderTimeout(input.context.signal);
   try {
     const response = await input.context.fetcher(url, {
       method: "GET",

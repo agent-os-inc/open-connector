@@ -1,19 +1,17 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext, ProviderRuntimeHandler } from "../provider-runtime.ts";
-import type { WappalyzerActionName } from "./actions.ts";
 
 import { compactObject, optionalBoolean, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
 import {
-  createProviderTimeout,
   defineApiKeyProviderExecutors,
-  isAbortLikeError,
   providerUserAgent,
   ProviderRequestError,
+  runProviderRequest,
 } from "../provider-runtime.ts";
 
 const service = "wappalyzer";
 const wappalyzerApiBaseUrl = "https://api.wappalyzer.com/v2/";
-const wappalyzerDefaultTimeoutMs = 30_000;
 
 interface WappalyzerJsonResponse {
   payload: unknown;
@@ -23,7 +21,10 @@ interface WappalyzerJsonResponse {
   };
 }
 
-export const wappalyzerActionHandlers: Record<WappalyzerActionName, ProviderRuntimeHandler<ApiKeyProviderContext>> = {
+export const wappalyzerActionHandlers: ProviderActionHandlers<
+  "wappalyzer",
+  ProviderRuntimeHandler<ApiKeyProviderContext>
+> = {
   get_credits_balance(_input, context) {
     return getCreditsBalance(context);
   },
@@ -153,8 +154,7 @@ async function requestWappalyzerJson(input: {
   signal?: AbortSignal;
   query?: Record<string, string | undefined>;
 }): Promise<WappalyzerJsonResponse> {
-  const timeout = createProviderTimeout(input.signal, wappalyzerDefaultTimeoutMs);
-  try {
+  return runProviderRequest({ signal: input.signal, label: "Wappalyzer" }, async (signal) => {
     const response = await input.fetcher(buildWappalyzerUrl(input.path, input.query), {
       method: "GET",
       headers: {
@@ -162,7 +162,7 @@ async function requestWappalyzerJson(input: {
         "user-agent": providerUserAgent,
         "x-api-key": input.apiKey,
       },
-      signal: timeout.signal,
+      signal,
     });
     const payload = await readWappalyzerPayload(response);
     if (!response.ok) {
@@ -172,20 +172,7 @@ async function requestWappalyzerJson(input: {
       payload,
       creditHeaders: readCreditHeaders(response.headers),
     };
-  } catch (error) {
-    if (error instanceof ProviderRequestError) {
-      throw error;
-    }
-    if (timeout.didTimeout() || isAbortLikeError(error)) {
-      throw new ProviderRequestError(504, "Wappalyzer request timed out");
-    }
-    throw new ProviderRequestError(
-      502,
-      error instanceof Error ? `Wappalyzer request failed: ${error.message}` : "Wappalyzer request failed",
-    );
-  } finally {
-    timeout.cleanup();
-  }
+  });
 }
 
 function buildWappalyzerUrl(path: string, query: Record<string, string | undefined> = {}): URL {

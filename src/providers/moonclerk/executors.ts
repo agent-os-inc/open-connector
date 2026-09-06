@@ -1,10 +1,15 @@
 import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { MoonclerkActionName } from "./actions.ts";
 
-import { optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
+import { optionalRecord, optionalString } from "../../core/cast.ts";
 import { queryParams } from "../../core/request.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerUserAgent,
+  ProviderRequestError,
+  requiredInputString,
+} from "../provider-runtime.ts";
 
 const service = "moonclerk";
 const moonclerkApiBaseUrl = "https://api.moonclerk.com";
@@ -13,7 +18,7 @@ const moonclerkVersionHeader = "application/vnd.moonclerk+json;version=1";
 type MoonclerkRequestPhase = "validate" | "execute";
 type MoonclerkActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const moonclerkActionHandlers: Record<MoonclerkActionName, MoonclerkActionHandler> = {
+export const moonclerkActionHandlers: ProviderActionHandlers<"moonclerk", MoonclerkActionHandler> = {
   async list_forms(input, context): Promise<unknown> {
     const payload = await requestMoonclerk({
       path: "/forms",
@@ -202,10 +207,6 @@ function extractMoonclerkErrorMessage(payload: unknown): string | undefined {
   }
 
   return optionalString(record.error) ?? optionalString(record.message) ?? optionalString(record.detail);
-}
-
-function requiredInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
 }
 
 function requiredArrayField(payload: unknown, fieldName: string): unknown[] {

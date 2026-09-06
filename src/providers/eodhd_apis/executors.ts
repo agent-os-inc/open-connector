@@ -1,4 +1,5 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { compactObject, nullableInteger, optionalInteger, optionalRecord, optionalString } from "../../core/cast.ts";
@@ -8,6 +9,7 @@ import {
   isAbortLikeError,
   providerUserAgent,
   ProviderRequestError,
+  requiredResponseRecord,
 } from "../provider-runtime.ts";
 
 type QueryValue = string | number | boolean | undefined;
@@ -15,9 +17,8 @@ type EodhdApisActionHandler = (input: Record<string, unknown>, context: ApiKeyPr
 
 const service = "eodhd_apis";
 const eodhdApisApiBaseUrl = "https://eodhd.com/api";
-const eodhdApisDefaultRequestTimeoutMs = 30_000;
 
-const eodhdApisActionHandlers: Record<string, EodhdApisActionHandler> = {
+const eodhdApisActionHandlers: ProviderActionHandlers<"eodhd_apis", EodhdApisActionHandler> = {
   search_instruments(input, context) {
     return searchInstruments(input, context);
   },
@@ -115,8 +116,8 @@ async function getRealTimeQuote(input: Record<string, unknown>, context: ApiKeyP
 
   return {
     quotes: Array.isArray(payload)
-      ? payload.map((item, index) => readRequiredObject(item, `payload[${index}]`))
-      : [readRequiredObject(payload, "payload")],
+      ? payload.map((item, index) => requiredResponseRecord(item, `payload[${index}]`))
+      : [requiredResponseRecord(payload, "payload")],
   };
 }
 
@@ -137,7 +138,7 @@ async function getEod(input: Record<string, unknown>, context: ApiKeyProviderCon
 
   if (Array.isArray(payload)) {
     return {
-      rows: payload.map((item, index) => readRequiredObject(item, `payload[${index}]`)),
+      rows: payload.map((item, index) => requiredResponseRecord(item, `payload[${index}]`)),
       value: null,
       raw: null,
     };
@@ -154,7 +155,7 @@ async function getEod(input: Record<string, unknown>, context: ApiKeyProviderCon
   return {
     rows: [],
     value: null,
-    raw: readRequiredObject(payload, "payload"),
+    raw: requiredResponseRecord(payload, "payload"),
   };
 }
 
@@ -235,7 +236,7 @@ async function eodhdApisGet(
   fetcher: typeof fetch,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const timeout = createProviderTimeout(signal, eodhdApisDefaultRequestTimeoutMs);
+  const timeout = createProviderTimeout(signal);
 
   let response: Response;
   try {
@@ -348,7 +349,7 @@ function normalizeUser(payload: unknown): {
   apiRequestsDate: string | null;
   dailyRateLimit: number | null;
 } {
-  const record = readRequiredObject(payload, "payload");
+  const record = requiredResponseRecord(payload, "payload");
   return {
     name: optionalString(record.name) ?? null,
     email: optionalString(record.email) ?? null,
@@ -364,15 +365,7 @@ function readObjectArray(value: unknown, fieldName: string): Array<Record<string
   if (!Array.isArray(value)) {
     throw new ProviderRequestError(502, `${fieldName} must be an array`);
   }
-  return value.map((item, index) => readRequiredObject(item, `${fieldName}[${index}]`));
-}
-
-function readRequiredObject(value: unknown, fieldName: string): Record<string, unknown> {
-  const object = optionalRecord(value);
-  if (!object) {
-    throw new ProviderRequestError(502, `${fieldName} must be an object`);
-  }
-  return object;
+  return value.map((item, index) => requiredResponseRecord(item, `${fieldName}[${index}]`));
 }
 
 function readRequiredString(value: unknown, fieldName: string): string {

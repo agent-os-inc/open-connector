@@ -1,6 +1,6 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { DubActionName } from "./actions.ts";
 
 import {
   compactObject,
@@ -24,7 +24,7 @@ const dubAnalyticsPath = "/analytics";
 type DubRequestPhase = "validate" | "execute";
 type DubActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const dubActionHandlers: Record<DubActionName, DubActionHandler> = {
+export const dubActionHandlers: ProviderActionHandlers<"dub", DubActionHandler> = {
   create_link(input, context) {
     return executeCreateLink(input, context);
   },
@@ -380,7 +380,7 @@ function createDubError(response: Response, payload: unknown, phase: DubRequestP
   }
 
   if (phase === "execute" && (response.status === 401 || response.status === 403)) {
-    return new ProviderRequestError(409, message);
+    return new ProviderRequestError(401, message);
   }
 
   if (phase === "execute" && [400, 404, 409, 410, 422].includes(response.status)) {

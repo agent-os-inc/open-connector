@@ -1,5 +1,5 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
-import type { GumloopActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import {
   compactObject,
@@ -11,6 +11,9 @@ import {
 } from "../../core/cast.ts";
 import {
   defineProviderExecutors,
+  isAbortLikeError,
+  providerInputError,
+  providerResponseError,
   providerUserAgent,
   ProviderRequestError,
   requireApiKeyCredential,
@@ -50,7 +53,7 @@ interface GumloopContext {
   projectId?: string;
 }
 
-export const gumloopActionHandlers: Record<GumloopActionName, GumloopActionHandler> = {
+export const gumloopActionHandlers: ProviderActionHandlers<"gumloop", GumloopActionHandler> = {
   list_saved_flows(input, context) {
     return listGumloopSavedFlows(input, context);
   },
@@ -410,7 +413,7 @@ function buildStartFlowRunContextBody(context: GumloopContext): Record<string, s
 }
 
 function readArrayProperty(payload: Record<string, unknown>, fieldName: string): Array<Record<string, unknown>> {
-  return objectArray(payload[fieldName], fieldName, providerOutputError);
+  return objectArray(payload[fieldName], fieldName, providerResponseError);
 }
 
 function readJsonInputValues(value: unknown): Record<string, unknown> {
@@ -450,16 +453,4 @@ function normalizeRunDetailsOutput(payload: Record<string, unknown>): Record<str
     log: Array.isArray(payload.log) ? payload.log.map((item) => String(item)) : undefined,
     raw: payload,
   });
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
-}
-
-function providerOutputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(502, message);
-}
-
-function isAbortLikeError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
 }

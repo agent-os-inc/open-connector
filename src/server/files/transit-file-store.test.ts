@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentDispositionForFileName, createTransitFileResponse } from "./transit-file-store.ts";
+import { contentDispositionForFileName, transitFileResponse } from "./transit-file-store.ts";
 
 describe("contentDispositionForFileName", () => {
   it("leaves an ASCII file name in the plain filename parameter", () => {
@@ -29,18 +29,15 @@ describe("contentDispositionForFileName", () => {
   });
 });
 
-describe("createTransitFileResponse", () => {
+describe("transitFileResponse", () => {
   it("builds a response for a file whose name is outside Latin-1", async () => {
-    const response = createTransitFileResponse({
-      file: new File(["hello"], "发票.pdf", { type: "application/pdf" }),
-      sizeBytes: 5,
-      name: "发票.pdf",
-      mimeType: "application/pdf",
-    });
+    const response = transitFileResponse("hello", { name: "发票.pdf", mimeType: "application/pdf", sizeBytes: 5 });
 
     expect(response.headers.get("content-disposition")).toBe(
       "attachment; filename=\"__.pdf\"; filename*=UTF-8''%E5%8F%91%E7%A5%A8.pdf",
     );
+    expect(response.headers.get("content-type")).toBe("application/pdf");
+    expect(response.headers.get("content-length")).toBe("5");
     expect(await response.text()).toBe("hello");
   });
 });

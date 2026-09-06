@@ -4,30 +4,23 @@ import type {
   ExecutionContext,
   ProviderExecutors,
   ProviderProxyExecutor,
-  ProxyExecutionResult,
 } from "../../core/types.ts";
-import type { RocketChatActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
-import { isIP } from "node:net";
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 import { assertPublicHttpUrl, isPrivateNetworkAccessAllowed } from "../../core/request.ts";
 import {
   createProviderFetch,
-  createProviderProxyUrl,
   defineProviderExecutors,
-  normalizeProviderProxyHeaders,
+  defineProviderProxy,
   ProviderRequestError,
   providerUserAgent,
-  readProviderProxyErrorMessage,
-  readProviderProxyResponse,
-  toProviderProxyError,
+  requireCustomCredential,
 } from "../provider-runtime.ts";
 
 const service = "rocket_chat";
 const requestTimeoutMs = 30_000;
 const validationPath = "/me";
-
-const privateAwareFetch = createProviderFetch({ allowPrivateNetwork: isPrivateNetworkAccessAllowed });
 
 interface RocketChatCredential {
   baseUrl: string;
@@ -44,7 +37,7 @@ interface RocketChatContext {
 
 type RocketChatActionHandler = (input: Record<string, unknown>, context: RocketChatContext) => Promise<unknown>;
 
-export const rocketChatActionHandlers: Record<RocketChatActionName, RocketChatActionHandler> = {
+export const rocketChatActionHandlers: ProviderActionHandlers<"rocket_chat", RocketChatActionHandler> = {
   async get_me(_input, context) {
     const profile = await requestRocketChatObject({
       credential: context.credential,
@@ -213,41 +206,22 @@ export const credentialValidators: CredentialValidators = {
   },
 };
 
-export const proxy: ProviderProxyExecutor = async (input, context): Promise<ProxyExecutionResult> => {
-  try {
-    const credential = await context.getCredential(service);
-    if (credential?.authType !== "custom_credential") {
-      throw new ProviderRequestError(401, "Configure rocket_chat custom credentials first.");
-    }
-    const rocketChatCredential = readRocketChatCredential(credential.values);
-    const url = createProviderProxyUrl(rocketChatCredential.apiBaseUrl, input.endpoint, input.query);
-    const headers = normalizeProviderProxyHeaders(input.headers);
-    headers.set("user-agent", providerUserAgent);
-    headers.set("X-Auth-Token", rocketChatCredential.authToken);
-    headers.set("X-User-Id", rocketChatCredential.userId);
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: async (context) => (await readRocketChatProxyCredential(context)).apiBaseUrl,
+  auth: { type: "none" },
+  allowPrivateNetwork: isPrivateNetworkAccessAllowed,
+  async customizeRequest({ context, headers }) {
+    const credential = await readRocketChatProxyCredential(context);
+    headers.set("X-Auth-Token", credential.authToken);
+    headers.set("X-User-Id", credential.userId);
+  },
+});
 
-    const init: RequestInit = {
-      method: input.method,
-      headers,
-      signal: context.signal,
-    };
-    if (input.body !== undefined) {
-      init.body = typeof input.body === "string" ? input.body : JSON.stringify(input.body);
-      if (!headers.has("content-type") && typeof input.body !== "string") {
-        headers.set("content-type", "application/json");
-      }
-    }
-
-    const response = await privateAwareFetch(url, init);
-    if (!response.ok) {
-      const text = await readProviderProxyErrorMessage(response, "");
-      throw new ProviderRequestError(response.status, text || `provider request failed with HTTP ${response.status}`);
-    }
-    return { ok: true, response: await readProviderProxyResponse(response) };
-  } catch (error) {
-    return toProviderProxyError(error, "provider request failed");
-  }
-};
+async function readRocketChatProxyCredential(context: ExecutionContext): Promise<RocketChatCredential> {
+  const credential = await requireCustomCredential(context, service);
+  return readRocketChatCredential(credential.values);
+}
 
 async function requestRocketChatObject(options: {
   credential: RocketChatCredential;
@@ -389,14 +363,11 @@ function normalizeRocketChatBaseUrl(
     allowPrivateNetwork,
     createError: (message) => new ProviderRequestError(400, message),
   });
-  if (url.protocol !== "https:") {
+  if (url.protocol !== "https:" && !allowPrivateNetwork) {
     throw new ProviderRequestError(400, "baseUrl must use https");
   }
   if (url.username || url.password) {
     throw new ProviderRequestError(400, "baseUrl must not include credentials");
-  }
-  if (!allowPrivateNetwork) {
-    validateRocketChatHostname(url.hostname);
   }
   url.hash = "";
   url.search = "";
@@ -408,44 +379,6 @@ function normalizeRocketChatBaseUrl(
     url.pathname = "";
   }
   return url.toString().endsWith("/") ? url.toString().slice(0, -1) : url.toString();
-}
-
-function validateRocketChatHostname(hostname: string): void {
-  const normalizedHostname = hostname.toLowerCase();
-  const ipVersion = isIP(normalizedHostname);
-  if (
-    (ipVersion === 4 && isRestrictedIpv4Host(normalizedHostname)) ||
-    (ipVersion === 6 && isRestrictedIpv6Host(normalizedHostname))
-  ) {
-    throw new ProviderRequestError(400, "baseUrl must not use a private IP address");
-  }
-}
-
-function isRestrictedIpv4Host(hostname: string): boolean {
-  const octets = hostname.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part))) {
-    return false;
-  }
-  const [first = 0, second = 0] = octets;
-  return (
-    first === 10 ||
-    first === 127 ||
-    first === 0 ||
-    (first === 100 && second >= 64 && second <= 127) ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168)
-  );
-}
-
-function isRestrictedIpv6Host(hostname: string): boolean {
-  return (
-    hostname === "::1" ||
-    hostname === "::" ||
-    hostname.startsWith("fc") ||
-    hostname.startsWith("fd") ||
-    hostname.startsWith("fe80:")
-  );
 }
 
 function buildRocketChatApiBaseUrl(baseUrl: string): string {

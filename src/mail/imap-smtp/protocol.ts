@@ -30,6 +30,8 @@ export interface MailCredential {
    * Providers with a hardcoded host leave it unset and keep 465.
    */
   smtpPort?: number;
+  /** Use implicit TLS on a non-standard submission port. */
+  smtpSecure?: boolean;
 }
 
 export interface MailProtocolConfig {
@@ -93,7 +95,6 @@ export interface MailSearchCriteria {
 export interface MailSearchPage {
   limit: number;
   beforeUid?: number;
-  peek: true;
 }
 
 export interface MailSearchSummariesResult {
@@ -147,6 +148,8 @@ export interface MailFolderStatus {
 
 export interface MailFetchedMessage {
   summary: MailSummary;
+  /** Message-IDs to seed a reply's `References` header, oldest first. */
+  references: string[];
   cc: MailAddress[];
   replyTo: MailAddress[];
   text: string | null;
@@ -160,13 +163,6 @@ export interface MailProtocol {
   validateSmtpCredential(credential: MailCredential): Promise<void>;
   sendMail(credential: MailCredential, input: MailSendInput): Promise<MailSendResult>;
   listFolders(credential: MailCredential): Promise<MailFolder[]>;
-  searchUids(credential: MailCredential, folder: string, criteria: MailSearchCriteria): Promise<number[]>;
-  fetchSummaries(
-    credential: MailCredential,
-    folder: string,
-    uids: number[],
-    options: { peek: true },
-  ): Promise<MailSummary[]>;
   searchSummaries(
     credential: MailCredential,
     folder: string,
@@ -177,7 +173,7 @@ export interface MailProtocol {
     credential: MailCredential,
     folder: string,
     uid: number,
-    options: { peek: true; maxBytes: number; skipAttachmentBodies: true },
+    options: { maxBytes: number },
   ): Promise<MailFetchedMessage>;
   downloadAttachment(
     credential: MailCredential,
@@ -316,16 +312,6 @@ export function createMailProtocol(config: MailProtocolConfig, deps: MailProtoco
         (await client.list()).map(normalizeMailbox),
       );
     },
-    async searchUids(credential, folder, criteria) {
-      return await withMailbox(config, deps, credential, folder, true, async (client) => {
-        return await searchUidsInMailbox(client, criteria);
-      });
-    },
-    async fetchSummaries(credential, folder, uids) {
-      return await withMailbox(config, deps, credential, folder, true, async (client) => {
-        return await fetchSummariesInMailbox(client, uids);
-      });
-    },
     async searchSummaries(credential, folder, criteria, page) {
       return await withMailbox(config, deps, credential, folder, true, async (client) => {
         const uids = await searchUidsInMailbox(client, criteria);
@@ -346,6 +332,9 @@ export function createMailProtocol(config: MailProtocolConfig, deps: MailProtoco
             flags: true,
             size: true,
             bodyStructure: true,
+            // The IMAP envelope carries no thread headers, so a reply can only
+            // continue the thread if they are fetched alongside it.
+            headers: ["references", "in-reply-to"],
           },
           { uid: true },
         );
@@ -372,6 +361,7 @@ export function createMailProtocol(config: MailProtocolConfig, deps: MailProtoco
 
         return {
           summary: normalizeSummary(message),
+          references: readReferences(toRecord(message)?.headers),
           cc: normalizeEnvelopeAddresses(message, "cc"),
           replyTo: normalizeEnvelopeAddresses(message, "replyTo"),
           text: parsedBody.text,
@@ -534,6 +524,7 @@ async function createSmtpTransport(
 ): Promise<MailSmtpTransport> {
   const target = await pinMailHost(credential.smtpHost, "SMTP host", config, deps);
   const port = credential.smtpPort ?? mailSmtpPort;
+  const secure = credential.smtpSecure ?? port === mailSmtpPort;
   const transportConfig = {
     host: target.host,
     ...(target.servername ? { servername: target.servername } : {}),
@@ -545,8 +536,8 @@ async function createSmtpTransport(
     // password in the clear to a server that does not offer the upgrade. The
     // flag stays off for implicit TLS, where it would only make a server whose
     // EHLO fails unusable rather than falling back to HELO as before.
-    secure: port === mailSmtpPort,
-    requireTLS: port !== mailSmtpPort,
+    secure,
+    requireTLS: !secure,
     auth: {
       user: credential.email,
       pass: credential.authorizationCode,
@@ -650,6 +641,7 @@ async function withMailbox<T>(
   deps: MailProtocolDependencies,
   credential: MailCredential,
   folder: string,
+  /** `true` opens the mailbox with EXAMINE; reads never set \Seen anyway because imapflow always uses BODY.PEEK. */
   readOnly: boolean,
   callback: (client: RuntimeImapClient) => Promise<T>,
 ) {
@@ -750,6 +742,30 @@ function normalizeMailbox(value: unknown): MailFolder {
     flags: normalizeStringArray(record?.flags),
     specialUse: readString(record?.specialUse),
   };
+}
+
+/**
+ * Read the Message-IDs that seed a reply's `References` header.
+ *
+ * Header fields fold across lines, so continuations are joined before reading
+ * them. RFC 5322 uses a single `In-Reply-To` value when `References` is absent.
+ */
+function readReferences(value: unknown): string[] {
+  const raw =
+    value instanceof Uint8Array ? new TextDecoder().decode(value) : typeof value === "string" ? value : undefined;
+  if (!raw) {
+    return [];
+  }
+
+  const lines = raw.replaceAll(/\r?\n[ \t]+/g, " ").split(/\r?\n/);
+  const referencesLine = lines.find((line) => /^references:/i.test(line));
+  if (referencesLine) {
+    return referencesLine.slice(referencesLine.indexOf(":") + 1).match(/<[^>]+>/g) ?? [];
+  }
+
+  const inReplyToLine = lines.find((line) => /^in-reply-to:/i.test(line));
+  const inReplyTo = inReplyToLine?.slice(inReplyToLine.indexOf(":") + 1).match(/<[^>]+>/g) ?? [];
+  return inReplyTo.length === 1 ? inReplyTo : [];
 }
 
 function normalizeSummary(value: unknown): MailSummary {

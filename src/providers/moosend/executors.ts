@@ -1,8 +1,8 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { MoosendActionName } from "./actions.ts";
 
-import { compactObject, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
+import { compactObject, optionalBoolean, optionalNumber, optionalRecord, optionalString } from "../../core/cast.ts";
 import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
 
 const service = "moosend";
@@ -22,7 +22,7 @@ interface MoosendRequestOptions {
   body?: Record<string, unknown>;
 }
 
-export const moosendActionHandlers: Record<MoosendActionName, MoosendActionHandler> = {
+export const moosendActionHandlers: ProviderActionHandlers<"moosend", MoosendActionHandler> = {
   list_mailing_lists(input, context) {
     return requestMoosendJson({
       context,
@@ -235,10 +235,6 @@ function requireString(value: unknown, fieldName: string): string {
     throw new ProviderRequestError(400, `${fieldName} is required`);
   }
   return text;
-}
-
-function optionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function optionalStringArray(value: unknown): string[] | undefined {

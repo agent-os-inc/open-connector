@@ -1,9 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { KieAiActionName } from "./actions.ts";
 
 import { optionalInteger, optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerInputError,
+  providerUserAgent,
+  ProviderRequestError,
+} from "../provider-runtime.ts";
 
 const service = "kie_ai";
 const kieAiBaseUrl = "https://api.kie.ai";
@@ -11,7 +16,7 @@ const downloadUrlTtlSeconds = 20 * 60;
 
 type KieAiActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const kieAiActionHandlers: Record<KieAiActionName, KieAiActionHandler> = {
+export const kieAiActionHandlers: ProviderActionHandlers<"kie_ai", KieAiActionHandler> = {
   async get_account_credits(_input, context): Promise<unknown> {
     const payload = await requestKieAi(context, "/api/v1/chat/credit");
     return {
@@ -24,7 +29,7 @@ export const kieAiActionHandlers: Record<KieAiActionName, KieAiActionHandler> = 
     const payload = await requestKieAi(context, "/api/v1/common/download-url", {
       method: "POST",
       body: {
-        url: requiredString(input.url, "url", kieAiInputError),
+        url: requiredString(input.url, "url", providerInputError),
       },
     });
     return {
@@ -144,8 +149,4 @@ function readString(value: unknown, field: string): string {
     throw new ProviderRequestError(502, `KIE.AI ${field} must be a string`);
   }
   return value;
-}
-
-function kieAiInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
 }

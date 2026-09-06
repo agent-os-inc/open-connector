@@ -1,6 +1,6 @@
 import type { CredentialValidationResult, CredentialValidators, ProviderExecutors } from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
-import type { TemplatedActionName } from "./actions.ts";
 
 import {
   compactObject,
@@ -9,10 +9,15 @@ import {
   optionalNumber,
   optionalRecord,
   optionalString,
-  requiredRecord,
   requiredString,
 } from "../../core/cast.ts";
-import { defineApiKeyProviderExecutors, providerUserAgent, ProviderRequestError } from "../provider-runtime.ts";
+import {
+  defineApiKeyProviderExecutors,
+  providerUserAgent,
+  ProviderRequestError,
+  requiredInputString,
+  requiredResponseRecord,
+} from "../provider-runtime.ts";
 
 const service = "templated";
 const templatedApiBaseUrl = "https://api.templated.io/v1";
@@ -20,7 +25,7 @@ const templatedApiBaseUrl = "https://api.templated.io/v1";
 type TemplatedRequestPhase = "validate" | "execute";
 type TemplatedActionHandler = (input: Record<string, unknown>, context: ApiKeyProviderContext) => Promise<unknown>;
 
-export const templatedActionHandlers: Record<TemplatedActionName, TemplatedActionHandler> = {
+export const templatedActionHandlers: ProviderActionHandlers<"templated", TemplatedActionHandler> = {
   async get_account(_input, context): Promise<unknown> {
     const payload = await requestTemplatedJson({
       apiKey: context.apiKey,
@@ -51,7 +56,7 @@ export const templatedActionHandlers: Record<TemplatedActionName, TemplatedActio
     return { templates: readCollection(payload, "template").map((item) => normalizeTemplate(item)) };
   },
   async get_template(input, context): Promise<unknown> {
-    const templateId = requiredProviderString(input.templateId, "templateId");
+    const templateId = requiredInputString(input.templateId, "templateId");
     const payload = await requestTemplatedJson({
       apiKey: context.apiKey,
       path: `/template/${encodeURIComponent(templateId)}`,
@@ -71,7 +76,7 @@ export const templatedActionHandlers: Record<TemplatedActionName, TemplatedActio
       path: "/render",
       method: "POST",
       body: compactObject({
-        template: requiredProviderString(input.templateId, "templateId"),
+        template: requiredInputString(input.templateId, "templateId"),
         format: optionalString(input.format),
         transparent: optionalBoolean(input.transparent),
         flatten: optionalBoolean(input.flatten),
@@ -101,7 +106,7 @@ export const templatedActionHandlers: Record<TemplatedActionName, TemplatedActio
     return { renders: readCollection(payload, "render").map((item) => normalizeRender(item)) };
   },
   async get_render(input, context): Promise<unknown> {
-    const renderId = requiredProviderString(input.renderId, "renderId");
+    const renderId = requiredInputString(input.renderId, "renderId");
     const payload = await requestTemplatedJson({
       apiKey: context.apiKey,
       path: `/render/${encodeURIComponent(renderId)}`,
@@ -112,7 +117,7 @@ export const templatedActionHandlers: Record<TemplatedActionName, TemplatedActio
     return { render: normalizeRender(payload) };
   },
   async delete_render(input, context): Promise<unknown> {
-    const renderId = requiredProviderString(input.renderId, "renderId");
+    const renderId = requiredInputString(input.renderId, "renderId");
     await requestTemplatedAck({
       apiKey: context.apiKey,
       path: `/render/${encodeURIComponent(renderId)}`,
@@ -275,34 +280,34 @@ function extractTemplatedErrorMessage(payload: unknown): string | undefined {
 
 function readCollection(payload: unknown, entityName: string): Array<Record<string, unknown>> {
   if (Array.isArray(payload)) {
-    return payload.map((item) => requiredProviderRecord(item, entityName));
+    return payload.map((item) => requiredResponseRecord(item, entityName));
   }
-  const record = requiredProviderRecord(payload, entityName);
+  const record = requiredResponseRecord(payload, entityName);
   const data = record.data;
   if (Array.isArray(data)) {
-    return data.map((item) => requiredProviderRecord(item, entityName));
+    return data.map((item) => requiredResponseRecord(item, entityName));
   }
   const pluralEntity = `${entityName}s`;
   const pluralData = record[pluralEntity];
   if (Array.isArray(pluralData)) {
-    return pluralData.map((item) => requiredProviderRecord(item, entityName));
+    return pluralData.map((item) => requiredResponseRecord(item, entityName));
   }
   throw new ProviderRequestError(502, `templated returned an unexpected ${pluralEntity} payload`);
 }
 
 function readRenderCreatePayload(payload: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(payload)) {
-    return payload.map((item) => requiredProviderRecord(item, "render"));
+    return payload.map((item) => requiredResponseRecord(item, "render"));
   }
-  const record = requiredProviderRecord(payload, "render");
+  const record = requiredResponseRecord(payload, "render");
   if (Array.isArray(record.data)) {
-    return record.data.map((item) => requiredProviderRecord(item, "render"));
+    return record.data.map((item) => requiredResponseRecord(item, "render"));
   }
   return [record];
 }
 
 function normalizeAccount(payload: unknown): Record<string, unknown> {
-  const record = requiredProviderRecord(payload, "account");
+  const record = requiredResponseRecord(payload, "account");
   const user = optionalRecord(record.user);
   return compactObject({
     id: optionalString(record.id) ?? optionalString(user?.id),
@@ -315,7 +320,7 @@ function normalizeAccount(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeTemplate(payload: unknown): Record<string, unknown> {
-  const record = requiredProviderRecord(payload, "template");
+  const record = requiredResponseRecord(payload, "template");
   return compactObject({
     id: requiredResponseString(record.id, "template.id"),
     name: requiredResponseString(record.name, "template.name"),
@@ -335,7 +340,7 @@ function normalizeTemplate(payload: unknown): Record<string, unknown> {
 }
 
 function normalizeRender(payload: unknown): Record<string, unknown> {
-  const record = requiredProviderRecord(payload, "render");
+  const record = requiredResponseRecord(payload, "render");
   return compactObject({
     id: requiredResponseString(record.id, "render.id"),
     url: nullableStringValue(record.url),
@@ -362,20 +367,12 @@ function normalizeOptionalUser(value: unknown): Record<string, unknown> | undefi
   });
 }
 
-function requiredProviderString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, (message) => new ProviderRequestError(400, message));
-}
-
 function requiredResponseString(value: unknown, fieldName: string): string {
   return requiredString(
     value,
     fieldName,
     () => new ProviderRequestError(502, `templated response is missing ${fieldName}`),
   );
-}
-
-function requiredProviderRecord(value: unknown, fieldName: string): Record<string, unknown> {
-  return requiredRecord(value, fieldName, (message) => new ProviderRequestError(502, message));
 }
 
 function readOptionalStringArray(value: unknown, fieldName: string): string[] | undefined {
@@ -385,18 +382,18 @@ function readOptionalStringArray(value: unknown, fieldName: string): string[] | 
   if (!Array.isArray(value)) {
     throw new ProviderRequestError(400, `${fieldName} must be an array`);
   }
-  return value.map((item) => requiredProviderString(item, `${fieldName}[]`));
+  return value.map((item) => requiredInputString(item, `${fieldName}[]`));
 }
 
 function readOptionalLayerOverrides(value: unknown): Record<string, Record<string, unknown>> | undefined {
   if (value == null) {
     return undefined;
   }
-  const overrides = requiredProviderRecord(value, "layers");
+  const overrides = requiredResponseRecord(value, "layers");
   return Object.fromEntries(
     Object.entries(overrides).map(([layerName, layerValue]) => [
       layerName,
-      requiredProviderRecord(layerValue, `layers.${layerName}`),
+      requiredResponseRecord(layerValue, `layers.${layerName}`),
     ]),
   );
 }

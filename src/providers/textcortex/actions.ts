@@ -163,9 +163,3 @@ export const textcortexActions: ActionDefinition[] = [
   retrieveModelAction,
   createChatCompletionAction,
 ];
-
-export type TextcortexActionName = "list_models" | "retrieve_model" | "create_chat_completion";
-
-export const textcortexActionByName: Map<string, ActionDefinition> = new Map(
-  textcortexActions.map((action) => [action.name, action] as const),
-);

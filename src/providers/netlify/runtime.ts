@@ -1,4 +1,4 @@
-import type { NetlifyActionName } from "./actions.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import { Buffer } from "node:buffer";
 import { compactObject, optionalBoolean, optionalRecord, optionalString } from "../../core/cast.ts";
@@ -18,7 +18,7 @@ export interface NetlifyActionContext {
 
 type NetlifyActionHandler = (input: Record<string, unknown>, context: NetlifyActionContext) => Promise<unknown>;
 
-export const netlifyActionHandlers: Record<NetlifyActionName, NetlifyActionHandler> = {
+export const netlifyActionHandlers: ProviderActionHandlers<"netlify", NetlifyActionHandler> = {
   async get_current_user(_input: Record<string, unknown>, context: NetlifyActionContext): Promise<unknown> {
     return {
       user: objectPayload(
@@ -330,19 +330,6 @@ export async function validateNetlifyCredential(
       siteCount: user.site_count,
     }),
   };
-}
-
-export async function executeNetlifyAction(
-  actionName: NetlifyActionName,
-  input: Record<string, unknown>,
-  context: NetlifyActionContext,
-): Promise<unknown> {
-  const handler = netlifyActionHandlers[actionName];
-  if (!handler) {
-    throw new ProviderRequestError(400, `unknown netlify action: ${actionName}`);
-  }
-
-  return handler(input, context);
 }
 
 async function postDeployAction(

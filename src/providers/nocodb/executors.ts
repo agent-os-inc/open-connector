@@ -1,5 +1,10 @@
-import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
-import type { NocodbActionName } from "./actions.ts";
+import type {
+  CredentialValidators,
+  ExecutionContext,
+  ProviderExecutors,
+  ProviderProxyExecutor,
+} from "../../core/types.ts";
+import type { ProviderActionHandlers } from "../provider-runtime.ts";
 
 import {
   objectArray,
@@ -8,21 +13,23 @@ import {
   optionalRecord,
   optionalString,
   requiredRecord,
-  requiredString,
 } from "../../core/cast.ts";
 import { assertPublicHttpUrl, compactJson, queryParams } from "../../core/request.ts";
 import {
   createProviderTimeout,
+  credentialProviderProxyBaseUrl,
   defineProviderExecutors,
+  defineProviderProxy,
   isAbortLikeError,
-  providerUserAgent,
+  providerInputError,
   ProviderRequestError,
+  providerUserAgent,
   requireApiKeyCredential,
+  requiredInputString,
 } from "../provider-runtime.ts";
 
 const service = "nocodb";
 const nocodbValidationPath = "/api/v1/auth/user/me";
-const nocodbRequestTimeoutMs = 30_000;
 
 interface NocodbContext {
   apiKey: string;
@@ -33,7 +40,7 @@ interface NocodbContext {
 
 type NocodbActionHandler = (input: Record<string, unknown>, context: NocodbContext) => Promise<unknown>;
 
-export const nocodbActionHandlers: Record<NocodbActionName, NocodbActionHandler> = {
+export const nocodbActionHandlers: ProviderActionHandlers<"nocodb", NocodbActionHandler> = {
   async get_current_user(_input, context) {
     return {
       user: requiredOutputObject(
@@ -398,7 +405,7 @@ interface NocodbRequestOptions {
 }
 
 async function requestNocodbJson(context: NocodbContext, input: NocodbRequestOptions): Promise<unknown> {
-  const timeout = createProviderTimeout(context.signal, nocodbRequestTimeoutMs);
+  const timeout = createProviderTimeout(context.signal);
   try {
     const response = await context.fetcher(buildNocodbUrl(context.baseUrl, input.path, input.query), {
       method: input.method ?? "GET",
@@ -636,14 +643,6 @@ function buildQuery(input: Record<string, string | number | boolean | undefined>
   return queryParams(input);
 }
 
-function requiredInputString(value: unknown, fieldName: string): string {
-  return requiredString(value, fieldName, providerInputError);
-}
-
-function providerInputError(message: string): ProviderRequestError {
-  return new ProviderRequestError(400, message);
-}
-
 function requiredOutputObject(value: unknown, label: string): Record<string, unknown> {
   const record = optionalRecord(value);
   if (!record) {
@@ -651,3 +650,9 @@ function requiredOutputObject(value: unknown, label: string): Record<string, unk
   }
   return record;
 }
+
+export const proxy: ProviderProxyExecutor = defineProviderProxy({
+  service,
+  baseUrl: credentialProviderProxyBaseUrl("baseUrl"),
+  auth: { type: "api_key_header", name: "xc-token" },
+});

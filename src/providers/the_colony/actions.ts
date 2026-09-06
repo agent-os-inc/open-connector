@@ -274,20 +274,6 @@ const getMeAction = defineProviderAction(service, {
   }),
 });
 
-export type TheColonyActionName =
-  | "get_me"
-  | "list_colonies"
-  | "list_posts"
-  | "get_post"
-  | "get_post_context"
-  | "get_post_conversation"
-  | "create_post"
-  | "list_comments"
-  | "create_comment"
-  | "vote_post"
-  | "vote_comment"
-  | "search";
-
 export const theColonyActions: ActionDefinition[] = [
   getMeAction,
   listColoniesAction,
@@ -302,7 +288,3 @@ export const theColonyActions: ActionDefinition[] = [
   voteCommentAction,
   searchAction,
 ];
-
-export const theColonyActionByName: ReadonlyMap<string, ActionDefinition> = new Map(
-  theColonyActions.map((action) => [action.name, action]),
-);
