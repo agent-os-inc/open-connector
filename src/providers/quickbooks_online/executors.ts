@@ -93,9 +93,9 @@ function readProviderConfig(value: unknown): Record<string, string> | undefined 
   return environment ? { environment } : undefined;
 }
 
-function requireRealmId(providerSecret: Record<string, string> | undefined): string {
+function requireRealmId(providerSecret: Record<string, unknown> | undefined): string {
   const realmId = providerSecret?.realmId;
-  if (!realmId || !/^[0-9]{1,255}$/.test(realmId)) {
+  if (typeof realmId !== "string" || !/^[0-9]{1,255}$/.test(realmId)) {
     throw new ProviderRequestError(401, "Reconnect QuickBooks Online to bind a valid company.");
   }
   return realmId;
@@ -126,7 +126,7 @@ async function getQuickBooksJson(
   url: URL,
   context: Pick<QuickBooksContext, "accessToken" | "tokenType" | "fetcher" | "refreshCredential" | "signal">,
 ): Promise<Record<string, unknown>> {
-  const timeout = createProviderTimeout(context.signal, 30_000);
+  const timeout = createProviderTimeout(context.signal);
   let replayed = false;
   try {
     while (true) {

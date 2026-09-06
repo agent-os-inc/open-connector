@@ -1,24 +1,13 @@
 import type { IConnectionStore, StoredConnection } from "../connection-service.ts";
-import type {
-  ActionExecutor,
-  CredentialValidators,
-  OAuthAuthorizationOption,
-  ProviderDefinition,
-  ResolvedCredential,
-} from "../core/types.ts";
+import type { ActionExecutor, CredentialValidators, ProviderDefinition, ResolvedCredential } from "../core/types.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
-import type { ISecretCodec } from "../server/secrets/secret-codec-core.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "./oauth-client-config-service.ts";
+import type { IOAuthCredentialRefresher } from "./oauth-credential-refresh-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "./oauth-flow-service.ts";
-import type { ProviderOAuthRuntime } from "./oauth-token.ts";
 
-import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCatalogStore } from "../catalog-store.ts";
 import { ConnectionService } from "../connection-service.ts";
-import { provider as slackProvider } from "../providers/slack/definition.ts";
-import { provider as slackbotProvider } from "../providers/slackbot/definition.ts";
-import { AesGcmSecretCodec } from "../server/secrets/secret-codec.ts";
 import { OAuthClientConfigService } from "./oauth-client-config-service.ts";
 import { OAuthFlowService } from "./oauth-flow-service.ts";
 
@@ -48,37 +37,64 @@ const oauthProvider: ProviderDefinition = {
   actions: [],
 };
 
-const selectableOAuthProvider: ProviderDefinition = {
+const gmailScopes = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.send",
+];
+
+const gmailOAuthProvider: ProviderDefinition = {
   ...oauthProvider,
-  service: "selectable",
+  service: "gmail",
+  auth: [
+    {
+      type: "oauth2",
+      authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+      tokenUrl: "https://oauth2.googleapis.com/token",
+      scopes: gmailScopes,
+      tokenEndpointAuthMethod: "client_secret_post",
+    },
+  ],
+};
+
+const callbackCredentialProvider: ProviderDefinition = {
+  ...oauthProvider,
+  service: "callback_credential",
   auth: [
     {
       type: "oauth2",
       authorizationUrl: "https://example.com/oauth/authorize",
       tokenUrl: "https://example.com/oauth/token",
-      scopes: ["core", "base", "middle", "feature"],
+      scopes: ["read"],
       tokenEndpointAuthMethod: "client_secret_post",
-      authorizationOptions: [
-        authorizationOption("core", true),
-        authorizationOption("base"),
-        authorizationOption("middle", false, ["base"]),
-        authorizationOption("feature", false, ["middle"]),
+      callbackCredentialFields: [
+        { parameter: "realmId", key: "realmId", required: true, maxLength: 10, pattern: "^[0-9]+$" },
       ],
     },
   ],
 };
 
-function authorizationOption(id: string, required = false, requires?: string[]): OAuthAuthorizationOption {
-  return {
-    id,
-    label: id,
-    description: `${id} access.`,
-    required,
-    defaultSelected: required,
-    risk: "standard",
-    requires,
-  };
-}
+const protectedOAuthProvider: ProviderDefinition = {
+  service: "protected_oauth",
+  displayName: "Protected OAuth",
+  categories: ["Finance"],
+  authTypes: ["oauth2"],
+  auth: [
+    {
+      type: "oauth2",
+      authorizationUrl: "https://example.com/oauth/authorize",
+      tokenUrl: "https://example.com/oauth/token",
+      revocationUrl: "https://example.com/oauth/revoke",
+      revocationMode: "required",
+      scopes: ["read"],
+      tokenEndpointAuthMethod: "client_secret_basic",
+      credentialVerification: "required",
+      connectionWriteMode: "create_only",
+      redactTokenErrors: true,
+    },
+  ],
+  actions: [],
+};
 
 const pkceOAuthProvider: ProviderDefinition = {
   ...oauthProvider,
@@ -107,21 +123,6 @@ const pkceOAuthProvider: ProviderDefinition = {
   ],
 };
 
-const callbackParameterOAuthProvider: ProviderDefinition = {
-  ...oauthProvider,
-  service: "callback_parameter",
-  auth: [
-    {
-      type: "oauth2",
-      authorizationUrl: "https://example.com/oauth/authorize",
-      tokenUrl: "https://example.com/oauth/token",
-      scopes: ["read"],
-      tokenEndpointAuthMethod: "client_secret_post",
-      tokenRequestCallbackParameters: ["employer"],
-    },
-  ],
-};
-
 const customOAuthProvider: ProviderDefinition = {
   ...oauthProvider,
   service: "custom_oauth",
@@ -146,7 +147,6 @@ const customOAuthProvider: ProviderDefinition = {
         authorizationCode: {
           grantType: false,
           redirectUri: false,
-          state: "state",
         },
       },
       tokenResponseEnvelope: {
@@ -253,48 +253,246 @@ describe("OAuthFlowService", () => {
     expect(authorizationUrl.searchParams.get("redirect_uri")).toBe("http://localhost:3000/oauth/callback");
     expect(authorizationUrl.searchParams.get("scope")).toBe("read write");
     expect(authorizationUrl.searchParams.get("state")).toBe(started.state);
-    expect(await services.states.take(createHash("sha256").update(started.state).digest("hex"))).toMatchObject({
-      service: "example",
-      connectionName: "work",
+    expect(await services.states.take(started.state)).toBeUndefined();
+    expect(services.states.values()).toContainEqual(
+      expect.objectContaining({
+        service: "example",
+        connectionName: "work",
+      }),
+    );
+    expect(services.states.values()[0]?.state).not.toBe(started.state);
+  });
+
+  it("limits Gmail authorization to the read-only scope", async () => {
+    const services = createServices([gmailOAuthProvider]);
+    await services.clientConfigs.upsertConfig({ service: "gmail", clientId: "client-id", clientSecret: "secret" });
+
+    const started = await services.flow.startAuthorization({ service: "gmail" });
+
+    expect(new URL(started.authorizationUrl).searchParams.get("scope")).toBe(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    );
+  });
+
+  it("fails closed when Gmail omits its read-only scope", async () => {
+    const provider: ProviderDefinition = {
+      ...gmailOAuthProvider,
+      auth: [
+        {
+          type: "oauth2",
+          authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+          tokenUrl: "https://oauth2.googleapis.com/token",
+          scopes: gmailScopes.slice(1),
+          tokenEndpointAuthMethod: "client_secret_post",
+        },
+      ],
+    };
+    const services = createServices([provider]);
+    await services.clientConfigs.upsertConfig({ service: "gmail", clientId: "client-id", clientSecret: "secret" });
+
+    await expect(services.flow.startAuthorization({ service: "gmail" })).rejects.toMatchObject({
+      code: "invalid_oauth_definition",
     });
   });
 
-  it("uses the requested scope subset from the OAuth client config", async () => {
-    const services = createServices([oauthProvider]);
+  it("binds only a declared singleton callback value to the stored credential", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ access_token: "access", refresh_token: "refresh", token_type: "Bearer" })),
+    );
+    const services = createServices([callbackCredentialProvider]);
     await services.clientConfigs.upsertConfig({
-      service: "example",
+      service: "callback_credential",
       clientId: "client-id",
-      clientSecret: "client-secret",
-      extra: { tenant: "default" },
-      requestedScopes: ["read"],
+      clientSecret: "secret",
+    });
+    const started = await services.flow.startAuthorization({
+      service: "callback_credential",
+      connectionName: "finance",
     });
 
-    const started = await services.flow.startAuthorization({ service: "example" });
+    await services.flow.completeAuthorization({
+      state: started.state,
+      code: "code",
+      callbackParameters: { realmId: ["12345"], ignored: ["secret-leak"] },
+    });
+    const connection = await services.connections.resolveForExecution("callback_credential", "finance");
 
-    expect(new URL(started.authorizationUrl).searchParams.get("scope")).toBe("read");
+    await expect(connection.getCredential("callback_credential")).resolves.toMatchObject({
+      providerSecret: { realmId: "12345" },
+    });
+    expect(JSON.stringify(await connection.getCredential("callback_credential"))).not.toContain("secret-leak");
   });
 
-  it("resolves transitive option requirements and preserves the selected scopes", async () => {
-    const services = createServices([selectableOAuthProvider]);
+  it("consumes state before rejecting missing or ambiguous callback credential fields", async () => {
+    const services = createServices([callbackCredentialProvider]);
     await services.clientConfigs.upsertConfig({
-      service: "selectable",
+      service: "callback_credential",
       clientId: "client-id",
-      clientSecret: "client-secret",
+      clientSecret: "secret",
+    });
+    const started = await services.flow.startAuthorization({ service: "callback_credential" });
+
+    await expect(
+      services.flow.completeAuthorization({
+        state: started.state,
+        code: "code",
+        callbackParameters: { realmId: ["123", "456"] },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_oauth_callback" });
+    await expect(
+      services.flow.completeAuthorization({ state: started.state, code: "code", callbackParameters: {} }),
+    ).rejects.toMatchObject({ code: "invalid_oauth_state" });
+  });
+
+  it("never exposes provider-controlled token error text during callback exchange", async () => {
+    const services = createServices([protectedOAuthProvider]);
+    await services.clientConfigs.upsertConfig({
+      service: "protected_oauth",
+      clientId: "client-id",
+      clientSecret: "secret",
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => Response.json({ access_token: "access-token", token_type: "Bearer" })),
+      vi.fn(async () =>
+        Response.json(
+          { error: "invalid_grant", error_description: "redaction-sentinel-callback-token-error" },
+          { status: 400 },
+        ),
+      ),
+    );
+    const started = await services.flow.startAuthorization({ service: "protected_oauth" });
+
+    await expect(services.flow.completeAuthorization({ state: started.state, code: "code" })).rejects.toMatchObject({
+      code: "oauth_token_exchange_failed",
+      message: "OAuth token exchange failed.",
+    });
+    await expect(services.connections.getConnectionSummary("protected_oauth")).resolves.toBeUndefined();
+  });
+
+  it("quarantines transport-ambiguous token exchange until external revocation is confirmed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const services = createServices([protectedOAuthProvider]);
+    await services.clientConfigs.upsertConfig({
+      service: "protected_oauth",
+      clientId: "client-id",
+      clientSecret: "secret",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Promise.reject(new TypeError("ambiguous transport sentinel"))),
+    );
+    const started = await services.flow.startAuthorization({ service: "protected_oauth" });
+
+    await expect(services.flow.completeAuthorization({ state: started.state, code: "code" })).rejects.toMatchObject({
+      code: "oauth_token_exchange_failed",
+      message: "OAuth token exchange failed.",
+    });
+    const quarantine = await services.connections.getConnectionSummary("protected_oauth");
+    expect(quarantine).toMatchObject({ configured: true });
+    vi.setSystemTime(new Date("2026-01-01T00:01:01.000Z"));
+    await expect(
+      services.connections.forceDeleteQuarantined("protected_oauth", undefined, quarantine!.id, false),
+    ).rejects.toMatchObject({ code: "oauth_external_revocation_required" });
+    await expect(
+      services.connections.forceDeleteQuarantined("protected_oauth", undefined, "wrong-id", true),
+    ).rejects.toMatchObject({ code: "connection_not_found" });
+    await expect(
+      services.connections.forceDeleteQuarantined("protected_oauth", undefined, quarantine!.id, true),
+    ).resolves.toMatchObject({ configured: false });
+  });
+
+  it("reserves a create-only alias before token exchange and fails without provider egress on collision", async () => {
+    const revoke = vi.fn(async () => undefined);
+    const loader = new StaticOAuthValidator();
+    const services = createServices([protectedOAuthProvider], {
+      loader,
+      refresher: { refresh: async (_service, value) => value, revoke },
+    });
+    await services.clientConfigs.upsertConfig({
+      service: "protected_oauth",
+      clientId: "client-id",
+      clientSecret: "secret",
+    });
+    const fetcher = vi.fn(async () =>
+      Response.json({ access_token: "issued-access", refresh_token: "issued-refresh" }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const started = await services.flow.startAuthorization({ service: "protected_oauth", connectionName: "finance" });
+    await services.connections.setOAuthCredential(
+      "protected_oauth",
+      {
+        authType: "oauth2",
+        accessToken: "existing-access",
+        refreshToken: "existing-refresh",
+        tokenType: "Bearer",
+        profile: { accountId: "protected_oauth:oauth2", displayName: "Existing", grantedScopes: [] },
+        metadata: {},
+      },
+      "finance",
     );
 
-    const started = await services.flow.startAuthorization({
-      service: "selectable",
-      authorizationOptionIds: ["feature"],
+    await expect(services.flow.completeAuthorization({ state: started.state, code: "code" })).rejects.toMatchObject({
+      code: "connection_already_exists",
     });
-    expect(new URL(started.authorizationUrl).searchParams.get("scope")).toBe("core base middle feature");
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalled();
+  });
 
-    await services.flow.completeAuthorization({ state: started.state, code: "code" });
-    await expect(services.connections.getCredential("selectable")).resolves.toMatchObject({
-      profile: { grantedScopes: ["core", "base", "middle", "feature"] },
+  it("revokes a staged issued grant when mandatory verification fails", async () => {
+    const revoke = vi.fn(async () => undefined);
+    const services = createServices([protectedOAuthProvider], {
+      loader: new FailingOAuthValidator(),
+      refresher: { refresh: async (_service, value) => value, revoke },
+    });
+    await services.clientConfigs.upsertConfig({
+      service: "protected_oauth",
+      clientId: "client-id",
+      clientSecret: "secret",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ access_token: "issued-access", refresh_token: "issued-refresh" })),
+    );
+    const started = await services.flow.startAuthorization({ service: "protected_oauth", connectionName: "finance" });
+
+    await expect(services.flow.completeAuthorization({ state: started.state, code: "code" })).rejects.toMatchObject({
+      code: "credential_verification_failed",
+    });
+    expect(revoke).toHaveBeenCalledOnce();
+    await expect(services.connections.getCredential("protected_oauth", "finance")).rejects.toMatchObject({
+      code: "connection_not_found",
+    });
+  });
+
+  it("durably quarantines the issued grant when compensating revocation cannot be proven", async () => {
+    const services = createServices([protectedOAuthProvider], {
+      loader: new FailingOAuthValidator(),
+      refresher: {
+        refresh: async (_service, value) => value,
+        revoke: async () => {
+          throw new Error("redaction-sentinel-revoke-body");
+        },
+      },
+    });
+    await services.clientConfigs.upsertConfig({
+      service: "protected_oauth",
+      clientId: "client-id",
+      clientSecret: "secret",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ access_token: "issued-access", refresh_token: "issued-refresh" })),
+    );
+    const started = await services.flow.startAuthorization({ service: "protected_oauth", connectionName: "finance" });
+
+    await expect(services.flow.completeAuthorization({ state: started.state, code: "code" })).rejects.toMatchObject({
+      code: "oauth_compensating_revocation_failed",
+      message: "OAuth connection could not be stored and its issued credential could not be safely revoked.",
+    });
+    await expect(services.connections.getCredential("protected_oauth", "finance")).rejects.toMatchObject({
+      code: "oauth_authorization_quarantined",
     });
   });
 
@@ -303,75 +501,6 @@ describe("OAuthFlowService", () => {
 
     await expect(services.flow.startAuthorization({ service: "example" })).rejects.toMatchObject({
       code: "oauth_client_config_required",
-    });
-  });
-
-  it("keeps an allowed connection-scoped OAuth client through callback", async () => {
-    const services = createServices([customOAuthProvider], {
-      allowedCustomOAuth: ["custom_oauth"],
-      secretCodec: new AesGcmSecretCodec("oauth-test-key"),
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json({ code: 0, data: { access_token: "access-token", token_type: "Bearer" } })),
-    );
-
-    const started = await services.flow.startAuthorization({
-      service: "custom_oauth",
-      connectionName: "tenant-a",
-      clientConfig: {
-        clientId: "custom-client-id",
-        clientSecret: "custom-client-secret",
-        requestedScopes: ["read"],
-        extra: { tenant: "tenant-a" },
-      },
-    });
-    expect(new URL(started.authorizationUrl).searchParams.get("app_id")).toBe("custom-client-id");
-    expect(new URL(started.authorizationUrl).searchParams.get("scope")).toBe("read");
-    expect(await services.states.take(createHash("sha256").update(started.state).digest("hex"))).toMatchObject({
-      clientConfig: {
-        clientId: "custom-client-id",
-        clientSecret: "custom-client-secret",
-        requestedScopes: ["read"],
-      },
-    });
-
-    const second = await services.flow.startAuthorization({
-      service: "custom_oauth",
-      connectionName: "tenant-a",
-      clientConfig: {
-        clientId: "custom-client-id",
-        clientSecret: "custom-client-secret",
-        requestedScopes: ["read"],
-        extra: { tenant: "tenant-a" },
-      },
-    });
-    await services.flow.completeAuthorization({ state: second.state, code: "code" });
-    await expect(services.connections.getCredential("custom_oauth", "tenant-a")).resolves.toMatchObject({
-      metadata: {
-        oauthClientConfig: {
-          clientId: "custom-client-id",
-          clientSecret: "custom-client-secret",
-          requestedScopes: ["read"],
-          extra: { tenant: "tenant-a" },
-        },
-      },
-    });
-  });
-
-  it("rejects connection-scoped OAuth clients outside the deployment allowlist", async () => {
-    const services = createServices([customOAuthProvider], {
-      allowedCustomOAuth: ["github"],
-      secretCodec: new AesGcmSecretCodec("oauth-test-key"),
-    });
-
-    await expect(
-      services.flow.startAuthorization({
-        service: "custom_oauth",
-        clientConfig: { clientId: "client-id", clientSecret: "client-secret", extra: { tenant: "tenant" } },
-      }),
-    ).rejects.toMatchObject({
-      code: "oauth_custom_app_not_allowed",
     });
   });
 
@@ -435,104 +564,6 @@ describe("OAuthFlowService", () => {
     await expect(services.connections.getCredential("example")).resolves.toBeUndefined();
   });
 
-  it("does not store OAuth credentials when the callback signal is already cancelled", async () => {
-    const services = createServices([oauthProvider]);
-    await services.clientConfigs.upsertConfig({
-      service: "example",
-      clientId: "client-id",
-      clientSecret: "client-secret",
-      extra: {
-        tenant: "default",
-      },
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json({ access_token: "access-token", token_type: "Bearer" })),
-    );
-    const controller = new AbortController();
-    controller.abort();
-
-    const started = await services.flow.startAuthorization({ service: "example" });
-    await expect(
-      services.flow.completeAuthorization({ state: started.state, code: "code", signal: controller.signal }),
-    ).rejects.toMatchObject({
-      code: "connection_cancelled",
-    });
-    await expect(services.connections.getCredential("example")).resolves.toBeUndefined();
-  });
-
-  it("uses separate Slack user and bot authorization paths with the same OAuth app", async () => {
-    const services = createServices([
-      { ...slackProvider, actions: [] },
-      { ...slackbotProvider, actions: [] },
-    ]);
-    for (const service of ["slack", "slackbot"]) {
-      await services.clientConfigs.upsertConfig({
-        service,
-        clientId: "shared-client-id",
-        clientSecret: "shared-client-secret",
-      });
-    }
-    const fetcher = vi.fn(async (url: string | URL | Request) => {
-      if (String(url).endsWith("/oauth.v2.user.access")) {
-        return Response.json({
-          ok: true,
-          access_token: "xoxp-user-access",
-          refresh_token: "user-refresh",
-          token_type: "Bearer",
-          expires_in: 43_200,
-          scope: "channels:read,chat:write,search:read",
-        });
-      }
-      return Response.json({
-        ok: true,
-        access_token: "bot-access",
-        refresh_token: "bot-refresh",
-        token_type: "bot",
-        expires_in: 43_200,
-        scope: "channels:read,chat:write",
-      });
-    });
-    vi.stubGlobal("fetch", fetcher);
-
-    const userStarted = await services.flow.startAuthorization({ service: "slack" });
-    const userAuthorizationUrl = new URL(userStarted.authorizationUrl);
-    expect(userAuthorizationUrl.pathname).toBe("/oauth/v2_user/authorize");
-    expect(userAuthorizationUrl.searchParams.get("scope")).toContain("search:read");
-    await services.flow.completeAuthorization({ state: userStarted.state, code: "user-code" });
-
-    const botStarted = await services.flow.startAuthorization({ service: "slackbot" });
-    const botAuthorizationUrl = new URL(botStarted.authorizationUrl);
-    expect(botAuthorizationUrl.pathname).toBe("/oauth/v2/authorize");
-    expect(botAuthorizationUrl.searchParams.get("scope")).not.toContain("search:read");
-    await services.flow.completeAuthorization({ state: botStarted.state, code: "bot-code" });
-
-    await expect(services.connections.getCredential("slack")).resolves.toMatchObject({
-      authType: "oauth2",
-      accessToken: "xoxp-user-access",
-      refreshToken: "user-refresh",
-      tokenType: "Bearer",
-      metadata: {
-        rawTokenType: "Bearer",
-        scope: "channels:read,chat:write,search:read",
-      },
-    });
-    await expect(services.connections.getCredential("slackbot")).resolves.toMatchObject({
-      authType: "oauth2",
-      accessToken: "bot-access",
-      refreshToken: "bot-refresh",
-      tokenType: "bot",
-      metadata: {
-        rawTokenType: "bot",
-        scope: "channels:read,chat:write",
-      },
-    });
-    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
-      "https://slack.com/api/oauth.v2.user.access",
-      "https://slack.com/api/oauth.v2.access",
-    ]);
-  });
-
   it("rejects expired OAuth authorization states", async () => {
     const services = createServices([oauthProvider], { stateMaxAgeMs: 1 });
     await services.clientConfigs.upsertConfig({
@@ -552,35 +583,6 @@ describe("OAuthFlowService", () => {
       code: "invalid_oauth_state",
       message: "OAuth state is missing or expired.",
     });
-  });
-
-  it("removes expired OAuth authorization states before starting a new flow", async () => {
-    const services = createServices([oauthProvider], { stateMaxAgeMs: 1_000 });
-    await services.clientConfigs.upsertConfig({
-      service: "example",
-      clientId: "client-id",
-      clientSecret: "client-secret",
-      extra: {
-        tenant: "default",
-      },
-    });
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:01.001Z"));
-    await services.states.set({
-      service: "example",
-      state: "expired",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    await services.states.set({
-      service: "example",
-      state: "current",
-      createdAt: "2026-01-01T00:00:00.001Z",
-    });
-
-    await services.flow.startAuthorization({ service: "example" });
-
-    await expect(services.states.take("expired")).resolves.toBeUndefined();
-    await expect(services.states.take("current")).resolves.toMatchObject({ state: "current" });
   });
 
   it("rejects malformed OAuth authorization state timestamps", async () => {
@@ -682,34 +684,6 @@ describe("OAuthFlowService", () => {
     expect((tokenBody as URLSearchParams).get("code_verifier")).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
-  it("forwards allowlisted callback parameters and stores refresh parameters", async () => {
-    const services = createServices([callbackParameterOAuthProvider]);
-    await services.clientConfigs.upsertConfig({
-      service: "callback_parameter",
-      clientId: "client-id",
-      clientSecret: "client-secret",
-    });
-    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
-      Response.json({ access_token: "access-token", refresh_token: "refresh-token", token_type: "Bearer" }),
-    );
-    vi.stubGlobal("fetch", fetcher);
-
-    const started = await services.flow.startAuthorization({ service: "callback_parameter" });
-    await services.flow.completeAuthorization({
-      state: started.state,
-      code: "code",
-      callbackParameters: { employer: "employer-id", untrusted: "ignored" },
-    });
-
-    const tokenBody = fetcher.mock.calls[0]?.[1]?.body;
-    expect(tokenBody).toBeInstanceOf(URLSearchParams);
-    expect(String(tokenBody)).toContain("employer=employer-id");
-    expect(String(tokenBody)).not.toContain("untrusted");
-    await expect(services.connections.getCredential("callback_parameter")).resolves.toMatchObject({
-      providerSecret: { oauthRefreshParameters: { employer: "employer-id" } },
-    });
-  });
-
   it("accepts token responses that use token instead of access_token", async () => {
     const services = createServices([oauthProvider]);
     await services.clientConfigs.upsertConfig({
@@ -776,7 +750,6 @@ describe("OAuthFlowService", () => {
       app_id: "client-id",
       auth_code: "code",
       secret: "client-secret",
-      state: started.state,
     });
     await expect(services.connections.getCredential("custom_oauth")).resolves.toMatchObject({
       authType: "oauth2",
@@ -825,39 +798,6 @@ describe("OAuthFlowService", () => {
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("https://tenant.example.com/oauth/tenant%2Fa/token");
   });
 
-  it("stores the token returned by a provider OAuth runtime", async () => {
-    const services = createServices([oauthProvider], {
-      oauthRuntime: {
-        async exchangeCode() {
-          return {
-            accessToken: "provider-access-token",
-            refreshToken: "provider-access-token",
-            tokenType: "Bearer",
-            expiresAt: "2026-10-30T00:00:00.000Z",
-            metadata: { permissions: "read,write" },
-          };
-        },
-      },
-    });
-    await services.clientConfigs.upsertConfig({
-      service: "example",
-      clientId: "client-id",
-      clientSecret: "client-secret",
-      extra: { tenant: "tenant" },
-    });
-
-    const started = await services.flow.startAuthorization({ service: "example" });
-    await services.flow.completeAuthorization({ state: started.state, code: "authorization-code" });
-
-    await expect(services.connections.getCredential("example")).resolves.toMatchObject({
-      authType: "oauth2",
-      accessToken: "provider-access-token",
-      refreshToken: "provider-access-token",
-      expiresAt: "2026-10-30T00:00:00.000Z",
-      metadata: { permissions: "read,write" },
-    });
-  });
-
   it("rejects OAuth endpoint config values that resolve to local network targets", async () => {
     const services = createServices([baseUrlOAuthProvider]);
     await services.clientConfigs.upsertConfig({
@@ -880,16 +820,13 @@ describe("OAuthFlowService", () => {
   });
 });
 
-interface CreateServicesOptions {
-  stateMaxAgeMs?: number;
-  allowedCustomOAuth?: string[];
-  secretCodec?: ISecretCodec;
-  oauthRuntime?: ProviderOAuthRuntime;
-}
-
 function createServices(
   providers: ProviderDefinition[],
-  options: CreateServicesOptions = {},
+  options: {
+    stateMaxAgeMs?: number;
+    loader?: IProviderLoader;
+    refresher?: IOAuthCredentialRefresher;
+  } = {},
 ): {
   clientConfigs: OAuthClientConfigService;
   connections: ConnectionService;
@@ -897,10 +834,10 @@ function createServices(
   states: MemoryOAuthStateStore;
 } {
   const catalog = createCatalogStore(providers);
-  const providerLoader = new EmptyProviderLoader(options.oauthRuntime);
   const connections = new ConnectionService({
     catalog,
-    providerLoader,
+    providerLoader: options.loader ?? new EmptyProviderLoader(),
+    oauthCredentials: options.refresher,
     store: new MemoryConnectionStore(),
   });
   const clientConfigs = new OAuthClientConfigService({
@@ -914,26 +851,17 @@ function createServices(
     clientConfigs,
     connections,
     flow: new OAuthFlowService({
+      providerLoader: options.loader ?? new EmptyProviderLoader(),
       clientConfigs,
       connections,
-      providerLoader,
       states,
       stateMaxAgeMs: options.stateMaxAgeMs,
-      secretCodec: options.secretCodec,
-      isCustomClientConfigAllowed: (service) =>
-        options.allowedCustomOAuth?.includes("*") || options.allowedCustomOAuth?.includes(service) || false,
     }),
     states,
   };
 }
 
 class EmptyProviderLoader implements IProviderLoader {
-  private readonly oauthRuntime?: ProviderOAuthRuntime;
-
-  constructor(oauthRuntime?: ProviderOAuthRuntime) {
-    this.oauthRuntime = oauthRuntime;
-  }
-
   async loadActionExecutor(_service: string, _actionId: string): Promise<ActionExecutor | undefined> {
     return undefined;
   }
@@ -945,9 +873,23 @@ class EmptyProviderLoader implements IProviderLoader {
   async loadCredentialValidators(_service: string): Promise<CredentialValidators | undefined> {
     return undefined;
   }
+}
 
-  async loadProviderOAuthRuntime(_service: string): Promise<ProviderOAuthRuntime | undefined> {
-    return this.oauthRuntime;
+class StaticOAuthValidator extends EmptyProviderLoader {
+  override async loadCredentialValidators(): Promise<CredentialValidators> {
+    return {
+      oauth2: async () => ({ profile: { displayName: "Verified", grantedScopes: ["read"] } }),
+    };
+  }
+}
+
+class FailingOAuthValidator extends EmptyProviderLoader {
+  override async loadCredentialValidators(): Promise<CredentialValidators> {
+    return {
+      oauth2: async () => {
+        throw new Error("mandatory verification failed");
+      },
+    };
   }
 }
 
@@ -971,11 +913,28 @@ class MemoryConnectionStore implements IConnectionStore {
     return connection;
   }
 
+  async create(
+    service: string,
+    connectionName: string,
+    credential: ResolvedCredential,
+  ): Promise<StoredConnection | undefined> {
+    if (await this.get(service, connectionName)) return undefined;
+    return this.set(service, connectionName, credential);
+  }
+
   async updateCredential(input: StoredConnection): Promise<boolean> {
     const key = createConnectionKey(input.service, input.connectionName);
     const current = this.store.get(key);
     if (current?.id !== input.id || current.revision !== input.revision) return false;
     this.store.set(key, { ...input, revision: crypto.randomUUID() });
+    return true;
+  }
+
+  async deleteIfRevision(input: StoredConnection): Promise<boolean> {
+    const key = createConnectionKey(input.service, input.connectionName);
+    const current = this.store.get(key);
+    if (current?.id !== input.id || current.revision !== input.revision) return false;
+    this.store.delete(key);
     return true;
   }
 
@@ -1015,12 +974,6 @@ class MemoryOAuthClientConfigStore implements IOAuthClientConfigStore {
 class MemoryOAuthStateStore implements IOAuthStateStore {
   private readonly states = new Map<string, OAuthAuthorizationState>();
 
-  async deleteCreatedBefore(cutoff: string): Promise<void> {
-    for (const [state, value] of this.states) {
-      if (value.createdAt < cutoff) this.states.delete(state);
-    }
-  }
-
   async set(state: OAuthAuthorizationState): Promise<void> {
     this.states.set(state.state, state);
   }
@@ -1029,5 +982,13 @@ class MemoryOAuthStateStore implements IOAuthStateStore {
     const value = this.states.get(state);
     this.states.delete(state);
     return value;
+  }
+
+  async deleteCreatedBefore(cutoff: string): Promise<void> {
+    for (const [key, state] of this.states) if (state.createdAt < cutoff) this.states.delete(key);
+  }
+
+  values(): OAuthAuthorizationState[] {
+    return [...this.states.values()];
   }
 }

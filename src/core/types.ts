@@ -14,6 +14,23 @@ export type JsonSchema = {
 export type AuthType = "no_auth" | "api_key" | "custom_credential" | "oauth2";
 
 /**
+ * Broad, task-oriented provider group calculated from catalog source metadata.
+ *
+ * Provider definitions do not need to repeat this field: the catalog builder
+ * adds it to runtime entries through the shared scenario resolver.
+ */
+export type ProviderScenario =
+  | "ai"
+  | "cross-border-ecommerce"
+  | "communication"
+  | "docs"
+  | "productivity"
+  | "marketing"
+  | "data-storage"
+  | "developer"
+  | "other";
+
+/**
  * A single credential field that users can configure for a provider.
  */
 export type CredentialDefinition = {
@@ -46,6 +63,21 @@ export type OAuthClientConfigFieldDefinition = CredentialDefinition & {
   location?: OAuthClientConfigFieldLocation;
   /** Default local value used when the caller omits this OAuth client config field. */
   defaultValue?: string;
+};
+
+/**
+ * Instructions for registering the OAuth app this provider needs.
+ *
+ * The local console shows these where users paste the client id and secret,
+ * because that is the moment they need them. Steps describe the provider's
+ * flow in this project's own words and link to the provider's own
+ * documentation; they never reproduce provider documentation or screenshots.
+ */
+export type OAuthClientSetupDefinition = {
+  /** Provider page where users register the OAuth app. */
+  docsUrl?: string;
+  /** Ordered setup steps, each a single self-contained sentence of plain text. */
+  steps: string[];
 };
 
 /**
@@ -102,6 +134,8 @@ export type OAuth2AuthDefinition = {
   revocationMode?: "delete_only" | "required";
   /** OAuth scopes joined with spaces into the authorization URL `scope` parameter. */
   scopes: string[];
+  /** Optional per-connection scope choices shown by the local console. */
+  authorizationOptions?: OAuthAuthorizationOption[];
   /** Separator used when joining OAuth scopes. Defaults to a space. */
   scopeSeparator?: " " | ",";
   /** How the runtime sends client credentials to the token endpoint. */
@@ -120,6 +154,8 @@ export type OAuth2AuthDefinition = {
       grantType?: string | false;
       code?: string;
       redirectUri?: string | false;
+      /** Provider-specific field name for forwarding the original OAuth state during code exchange. */
+      state?: string | false;
     };
     refresh?: {
       grantType?: string | false;
@@ -139,6 +175,8 @@ export type OAuth2AuthDefinition = {
   };
   /** Extra static authorization URL parameters, such as Google `access_type=offline`. */
   authorizationParams?: Record<string, string>;
+  /** Provider callback query parameters forwarded to token exchange and later token refresh. */
+  tokenRequestCallbackParameters?: string[];
   /** Provider-specific OAuth authorization request field names. */
   authorizationRequestFields?: {
     clientId?: string | false;
@@ -149,6 +187,8 @@ export type OAuth2AuthDefinition = {
   };
   /** Extra local OAuth app fields required before starting authorization. */
   clientConfigFields?: OAuthClientConfigFieldDefinition[];
+  /** How to register the provider OAuth app that supplies the client id and secret. */
+  clientSetup?: OAuthClientSetupDefinition;
   /** Require the provider validator to succeed before the credential is stored. */
   credentialVerification?: "best_effort" | "required";
   /** Prevent OAuth completion from replacing an existing alias credential. */
@@ -173,6 +213,16 @@ export type OAuth2AuthDefinition = {
     pattern?: string;
   }>;
 };
+
+export interface OAuthAuthorizationOption {
+  id: string;
+  label: string;
+  description: string;
+  required: boolean;
+  defaultSelected: boolean;
+  risk: "standard" | "sensitive" | "destructive";
+  requires?: string[];
+}
 
 /**
  * Provider authentication capabilities advertised in the public catalog.
@@ -281,11 +331,8 @@ export type ResolvedCredential =
       expiresAt?: string;
       /** OAuth refresh token, if the provider issued one. */
       refreshToken?: string;
-      /**
-       * Provider callback values needed for execution, such as an account or
-       * tenant identifier. Stored only inside the encrypted credential.
-       */
-      providerSecret?: Record<string, string>;
+      /** Provider-owned secret state stored with the credential. */
+      providerSecret?: Record<string, unknown>;
       /** Stable provider account identity safe to show in local APIs and MCP. */
       profile: CredentialProfile;
       /** Raw token metadata such as provider scope or token type. */
@@ -309,13 +356,7 @@ export interface TransitFileRead {
 
 export interface TransitFileStore {
   readonly maxBytes: number;
-  create(file: File): Promise<{
-    fileId: string;
-    downloadUrl: string;
-    sizeBytes: number;
-    name: string;
-    mimeType: string;
-  }>;
+  create(file: File): Promise<TransitFileUpload>;
   read(fileId: string): Promise<TransitFileRead>;
   delete(fileId: string): Promise<boolean>;
 }

@@ -1,8 +1,10 @@
 import type { CatalogStore, RuntimeActionDefinition } from "../catalog-store.ts";
-import type { ConnectionService } from "../connection-service.ts";
+import type { ConnectionService, ConnectionSummary } from "../connection-service.ts";
 import type { ActionPolicySnapshot } from "../core/action-policy.ts";
-import type { ActionSearchIndexProvider, ActionSearchResult } from "../core/action-search.ts";
+import type { ActionSearchDocument, ActionSearchIndexProvider } from "../core/action-search.ts";
 import type { TransitFileUpload } from "../core/types.ts";
+import type { MarketplaceConfigInput, MarketplaceService } from "../marketplace/marketplace-service.ts";
+import type { OAuthClientConfigInput } from "../oauth/oauth-client-config-service.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { LocalAuthOptions } from "./api/auth.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
@@ -12,17 +14,16 @@ import type { IIdempotencyStore } from "./storage/idempotency-store.ts";
 import type { IRuntimePolicyStore } from "./storage/runtime-policy-store.ts";
 import type { RunLogCaller, RunLogListInput } from "./storage/runtime-store.ts";
 import type { RuntimeGrant, RuntimeTokenService } from "./storage/runtime-token-service.ts";
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { Scalar } from "@scalar/hono-api-reference";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { ConnectionError, defaultConnectionName, normalizeConnectionName } from "../connection-service.ts";
 import { ActionPolicyService, emptyPolicyRules } from "../core/action-policy.ts";
 import { DEFAULT_ACTION_SEARCH_LIMIT, createActionSearchIndexProvider, searchActions } from "../core/action-search.ts";
-import { optionalRecord, optionalString, requiredString } from "../core/cast.ts";
-import { createMcpServer, listMcpToolSummaries } from "../mcp.ts";
+import { optionalRecord, optionalString, requiredString, requiredStringArray } from "../core/cast.ts";
+import { PromiseCache } from "../core/promise-cache.ts";
+import { MarketplaceError } from "../marketplace/marketplace-service.ts";
 import { OAuthClientConfigError, OAuthClientConfigService } from "../oauth/oauth-client-config-service.ts";
 import { OAuthFlowError, OAuthFlowService } from "../oauth/oauth-flow-service.ts";
 import {
@@ -48,14 +49,60 @@ import {
   serializeRuntimeConnectedApp,
   serializeRuntimeFailure,
   serializeRuntimeProvider,
+  unknownActionFailure,
   writeRuntimeActionHttpResult,
   writeRuntimeFailure,
   writeRuntimeSuccess,
 } from "./api/runtime-api.ts";
 import { createTenantFileMiddleware, currentTenant } from "./files/tenant-context.ts";
-import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
+import { TransitFileError } from "./files/transit-file-store.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
 import { decodeRunLogCursor } from "./storage/runtime-store.ts";
+import { summarizeRuntimeToken } from "./storage/runtime-token-service.ts";
+
+type McpModule = typeof import("../mcp.ts");
+
+/**
+ * The MCP module pulls in @modelcontextprotocol/server and zod, which no other startup path needs, so it is
+ * loaded on the first /mcp request. The cache shares one in-flight import; a rejected import is evicted so
+ * transient resolution failures retry, while evaluation errors rethrow identically.
+ */
+const mcpModule = new PromiseCache<McpModule>();
+
+function loadMcpModule(): Promise<McpModule> {
+  return mcpModule.get("", () => import("../mcp.ts"));
+}
+
+/** The Scalar API reference is only rendered for /docs, so its package is loaded on the first request. */
+const docsHandler = new PromiseCache<MiddlewareHandler>();
+
+function loadDocsHandler(): Promise<MiddlewareHandler> {
+  return docsHandler.get("", async () => {
+    const { Scalar } = await import("@scalar/hono-api-reference");
+    return Scalar({
+      pageTitle: "OOMOL Connect API Reference",
+      url: "/openapi.json",
+      theme: "default",
+      darkMode: false,
+      forceDarkModeState: "light",
+      customCss: `
+          :root {
+            --scalar-color-accent: rgb(59, 99, 251);
+            --scalar-background-accent: rgba(59, 99, 251, 0.12);
+          }
+        `,
+    });
+  });
+}
+
+/**
+ * Import and evaluate the modules the /mcp and /docs routes defer to their first request. The Node server never
+ * calls this, so its startup graph stays small; Cloudflare Workers call it at app creation so an isolate keeps
+ * paying module evaluation up front rather than on its first MCP or docs request.
+ */
+export async function preloadOptionalServerModules(): Promise<void> {
+  await Promise.all([loadMcpModule(), loadDocsHandler()]);
+}
 
 /**
  * Dependencies required to construct the local connector server.
@@ -72,7 +119,6 @@ export interface IConnectServerOptions {
   transitFiles: ITransitFileService;
   tenantFiles?: boolean;
   uploadTransitFile?: (request: Request) => Promise<TransitFileUpload>;
-  staticRoot?: string;
   auth?: LocalAuthOptions;
   actionPolicy?: ActionPolicyService;
   runtimePolicyStore: IRuntimePolicyStore;
@@ -80,6 +126,7 @@ export interface IConnectServerOptions {
   registerStaticRoutes?: (app: Hono) => void;
   logger?: Logger;
   compressApiResponses?: boolean;
+  marketplace?: MarketplaceService;
 }
 
 /**
@@ -101,7 +148,6 @@ export class ConnectServer {
       catalog: options.catalog,
       providerLoader: options.providerLoader,
       connections: options.connections,
-      actionPolicy: this.actionPolicy,
       logger: options.logger,
     });
   }
@@ -142,6 +188,18 @@ export class ConnectServer {
       app.use("*", createTenantFileMiddleware(auth.runtimeToken));
     }
     app.use("*", createLocalAuthMiddleware({ ...auth, tenantFiles: this.options.tenantFiles }));
+    if (this.options.marketplace) {
+      app.get("/api/marketplace", (context) => context.json(this.options.marketplace!.getState()));
+      app.put("/api/marketplace", (context) => this.configureMarketplace(context));
+      app.patch("/api/marketplace", (context) => this.configureMarketplace(context));
+      app.delete("/api/marketplace", (context) => this.deleteMarketplace(context));
+      app.get("/api/provider-preferences", async (context) =>
+        context.json(await this.options.marketplace!.listProviderPreferences()),
+      );
+      app.patch("/api/provider-preferences/:service", (context) =>
+        this.updateProviderPreference(context, context.req.param("service")),
+      );
+    }
     app.get("/v1/health", (context) => writeRuntimeSuccess(context, { ok: true, runtime: "oomol-connect" }));
     app.get("/v1/providers", (context) => this.listRuntimeProviders(context));
     app.get("/v1/actions", (context) => this.listRuntimeActions(context));
@@ -162,22 +220,7 @@ export class ConnectServer {
         }),
       ),
     );
-    app.get(
-      "/docs",
-      Scalar({
-        pageTitle: "OOMOL Connect API Reference",
-        url: "/openapi.json",
-        theme: "default",
-        darkMode: false,
-        forceDarkModeState: "light",
-        customCss: `
-          :root {
-            --scalar-color-accent: rgb(59, 99, 251);
-            --scalar-background-accent: rgba(59, 99, 251, 0.12);
-          }
-        `,
-      }),
-    );
+    app.get("/docs", async (context, next) => (await loadDocsHandler())(context, next));
 
     // Schema-free listing. The action detail view loads full schemas on demand
     // from /api/actions/:actionId. The catalog is immutable at runtime, so the
@@ -224,11 +267,18 @@ export class ConnectServer {
     app.post("/mcp", (context) => this.handleMcp(context));
     app.get("/mcp", (context) => this.rejectMcpMethod(context));
     app.delete("/mcp", (context) => this.rejectMcpMethod(context));
-    app.get("/mcp/tools", (context) => context.json({ tools: listMcpToolSummaries() }));
+    app.get("/mcp/tools", async (context) => context.json({ tools: (await loadMcpModule()).listMcpToolSummaries() }));
 
     this.options.registerStaticRoutes?.(app);
     app.onError((error, context) => {
       if (error instanceof HttpRequestError) {
+        if (context.req.path.startsWith("/v1/")) {
+          return writeRuntimeFailure(context, {
+            status: error.status,
+            errorCode: error.code,
+            message: error.message,
+          });
+        }
         return jsonError(context, error.status, error.code, error.message);
       }
       this.options.logger?.error(
@@ -254,6 +304,41 @@ export class ConnectServer {
     return context.body(providerSummariesJson, 200, { "Content-Type": "application/json" });
   }
 
+  private async configureMarketplace(context: Context): Promise<Response> {
+    const body = await readJsonBody(context);
+    const input: MarketplaceConfigInput = {
+      discoveryUrl: optionalString(body.discoveryUrl),
+      apiKey: optionalString(body.apiKey),
+      enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+    };
+    try {
+      return context.json(await this.options.marketplace!.configure(input));
+    } catch (error) {
+      if (error instanceof MarketplaceError) {
+        return jsonError(context, error.status === 404 ? 404 : 400, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async deleteMarketplace(context: Context): Promise<Response> {
+    await this.options.marketplace!.remove();
+    return context.json(this.options.marketplace!.getState());
+  }
+
+  private async updateProviderPreference(context: Context, service: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    if (typeof body.enabled !== "boolean") {
+      return jsonError(context, 400, "invalid_input", "enabled must be a boolean.");
+    }
+    try {
+      return context.json(await this.options.marketplace!.setProviderEnabled(service, body.enabled));
+    } catch (error) {
+      if (error instanceof MarketplaceError) return jsonError(context, 404, error.code, error.message);
+      throw error;
+    }
+  }
+
   private getProvider(context: Context, service: string): Response {
     const provider = this.options.catalog.providers.find((provider) => provider.service === service);
     if (!provider) {
@@ -268,6 +353,7 @@ export class ConnectServer {
       if (this.options.uploadTransitFile) {
         return context.json(await this.options.uploadTransitFile(context.req.raw));
       }
+
       const form = await context.req.raw.formData();
       const file = form.get("file");
       if (!(file instanceof File)) {
@@ -282,12 +368,7 @@ export class ConnectServer {
 
   private async getTransitFile(context: Context, fileId: string): Promise<Response> {
     try {
-      if (this.options.transitFiles.response) {
-        return await this.options.transitFiles.response(fileId);
-      }
-
-      const file = await this.options.transitFiles.read(fileId);
-      return createTransitFileResponse(file);
+      return await this.options.transitFiles.response(fileId);
     } catch (error) {
       return this.handleTransitFileError(context, error);
     }
@@ -360,7 +441,6 @@ export class ConnectServer {
       return context.text(
         renderActionMarkdown(action, {
           connection: await this.options.connections.getConnectionSummary(action.service, readConnectionName(context)),
-          providerPermissions: action.providerPermissions,
           policy,
         }),
         200,
@@ -393,7 +473,13 @@ export class ConnectServer {
         return true;
       }
 
-      return [provider.service, provider.displayName, provider.categories.join(" "), provider.authTypes.join(" ")]
+      return [
+        provider.service,
+        provider.displayName,
+        provider.categories.join(" "),
+        provider.scenario,
+        provider.authTypes.join(" "),
+      ]
         .join(" ")
         .toLowerCase()
         .includes(query);
@@ -431,7 +517,7 @@ export class ConnectServer {
     return writeRuntimeSuccess(context, await this.serializeSearchResults(results));
   }
 
-  private async serializeSearchResults(results: ActionSearchResult[]): Promise<RuntimeActionSearchResult[]> {
+  private async serializeSearchResults(results: ActionSearchDocument[]): Promise<RuntimeActionSearchResult[]> {
     const authenticated = new Set(
       await this.options.connections.listAuthenticatedServices([...new Set(results.map((result) => result.service))]),
     );
@@ -447,12 +533,7 @@ export class ConnectServer {
   private getRuntimeAction(context: Context, actionId: string): Response {
     const action = this.options.catalog.actionsById.get(actionId);
     if (!action) {
-      return writeRuntimeFailure(context, {
-        status: 404,
-        errorCode: "invalid_input",
-        message: `unknown action: ${actionId}`,
-        meta: { actionId },
-      });
+      return writeRuntimeFailure(context, unknownActionFailure(actionId));
     }
 
     return writeRuntimeSuccess(context, serializeRuntimeAction(action));
@@ -461,12 +542,7 @@ export class ConnectServer {
   private async createRuntimeActionRun(context: Context, actionId: string): Promise<Response> {
     const action = this.options.catalog.actionsById.get(actionId);
     if (!action) {
-      return writeRuntimeFailure(context, {
-        status: 404,
-        errorCode: "invalid_input",
-        message: `unknown action: ${actionId}`,
-        meta: { actionId },
-      });
+      return writeRuntimeFailure(context, unknownActionFailure(actionId));
     }
 
     const body = await readJsonBody(context);
@@ -595,7 +671,7 @@ export class ConnectServer {
     connectionName: string | undefined,
     policy: ActionPolicySnapshot,
     runtimeGrant: RuntimeGrant | undefined,
-    signal: AbortSignal,
+    signal: AbortSignal | undefined,
   ): Promise<RuntimeActionHttpResult> {
     try {
       const run = await this.options.actions.run({
@@ -608,12 +684,7 @@ export class ConnectServer {
         signal,
       });
       if (!run) {
-        return serializeRuntimeFailure({
-          status: 404,
-          errorCode: "invalid_input",
-          message: `unknown action: ${actionId}`,
-          meta: { actionId },
-        });
+        return serializeRuntimeFailure(unknownActionFailure(actionId));
       }
 
       return serializeRuntimeActionResult({
@@ -643,8 +714,8 @@ export class ConnectServer {
     } catch (error) {
       if (error instanceof HttpRequestError) {
         return writeRuntimeFailure(context, {
-          status: 400,
-          errorCode: "invalid_input",
+          status: error.status,
+          errorCode: error.code,
           message: error.message,
           meta: { service },
         });
@@ -669,6 +740,7 @@ export class ConnectServer {
       input: body,
       connectionName: readConnectionName(context, body),
       policy,
+      signal: context.req.raw.signal,
     });
     if (result.ok) {
       return writeRuntimeSuccess(context, result.response);
@@ -684,17 +756,42 @@ export class ConnectServer {
   }
 
   private async listRuntimeApps(context: Context): Promise<Response> {
+    let policy: ActionPolicySnapshot;
+    try {
+      policy = await this.getPolicySnapshot(context);
+    } catch {
+      return writeRuntimeFailure(context, {
+        status: 500,
+        errorCode: "internal_error",
+        message: "Runtime policy is unavailable.",
+      });
+    }
     return writeRuntimeSuccess(
       context,
-      (await this.options.connections.listConnections()).map(serializeRuntimeConnectedApp),
+      this.filterAllowedConnections(policy, await this.options.connections.listConnections()).map(
+        serializeRuntimeConnectedApp,
+      ),
     );
   }
 
   private async listRuntimeAppsByService(context: Context, service: string): Promise<Response> {
+    let policy: ActionPolicySnapshot;
+    try {
+      policy = await this.getPolicySnapshot(context);
+    } catch {
+      return writeRuntimeFailure(context, {
+        status: 500,
+        errorCode: "internal_error",
+        message: "Runtime policy is unavailable.",
+        meta: { service },
+      });
+    }
     try {
       return writeRuntimeSuccess(
         context,
-        (await this.options.connections.listConnectionsByService(service)).map(serializeRuntimeConnectedApp),
+        this.filterAllowedConnections(policy, await this.options.connections.listConnectionsByService(service)).map(
+          serializeRuntimeConnectedApp,
+        ),
       );
     } catch (error) {
       if (error instanceof ConnectionError) {
@@ -712,31 +809,47 @@ export class ConnectServer {
 
   private async listAuthenticatedRuntimeApps(context: Context): Promise<Response> {
     const services = context.req.queries("service") ?? [];
-    return writeRuntimeSuccess(context, await this.options.connections.listAuthenticatedServices(services));
+    let policy: ActionPolicySnapshot;
+    try {
+      policy = await this.getPolicySnapshot(context);
+    } catch {
+      return writeRuntimeFailure(context, {
+        status: 500,
+        errorCode: "internal_error",
+        message: "Runtime policy is unavailable.",
+      });
+    }
+    const authenticated = new Set(
+      this.filterAllowedConnections(policy, await this.options.connections.listConnections())
+        .filter((connection) => connection.configured && connection.authType !== "no_auth")
+        .map((connection) => connection.service),
+    );
+    return writeRuntimeSuccess(
+      context,
+      services.filter((service) => authenticated.has(service)),
+    );
+  }
+
+  private filterAllowedConnections(
+    policy: ActionPolicySnapshot,
+    connections: ConnectionSummary[],
+  ): ConnectionSummary[] {
+    return connections.filter(
+      (connection) => connection.authType === "no_auth" || policy.evaluateConnection(connection.id).allowed,
+    );
   }
 
   private async handleMcp(context: Context): Promise<Response> {
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    const server = createMcpServer({
+    const { handleMcpRequest } = await loadMcpModule();
+    return await handleMcpRequest(context.req.raw, {
       catalog: this.options.catalog,
-      providerLoader: this.options.providerLoader,
       connections: this.options.connections,
       actions: this.options.actions,
-      actionPolicy: this.actionPolicy,
       actionSearch: this.actionSearch,
       getPolicySnapshot: () => this.getPolicySnapshot(context),
       runtimeGrant: readRuntimeGrant(context),
+      signal: context.req.raw.signal,
     });
-
-    await server.connect(transport);
-    try {
-      return await transport.handleRequest(context.req.raw);
-    } finally {
-      await server.close();
-    }
   }
 
   private rejectMcpMethod(context: Context): Response {
@@ -808,7 +921,11 @@ export class ConnectServer {
       this.options.logger?.info(logContext, "connection started");
       return this.writeConnectionResult(
         context,
-        this.options.connections.connectWithApiKey(service, { values, connectionName }),
+        this.options.connections.connectWithApiKey(service, {
+          values,
+          connectionName,
+          signal: context.req.raw.signal,
+        }),
         logContext,
       );
     }
@@ -816,7 +933,11 @@ export class ConnectServer {
       this.options.logger?.info(logContext, "connection started");
       return this.writeConnectionResult(
         context,
-        this.options.connections.connectWithCustomCredential(service, { values, connectionName }),
+        this.options.connections.connectWithCustomCredential(service, {
+          values,
+          connectionName,
+          signal: context.req.raw.signal,
+        }),
         logContext,
       );
     }
@@ -832,7 +953,7 @@ export class ConnectServer {
   }
 
   private async disconnect(context: Context, service: string): Promise<Response> {
-    const body = context.req.header("content-type")?.includes("application/json") ? await readJsonBody(context) : {};
+    const body = await readJsonBody(context);
     const connectionName = readConnectionName(context, body);
     const logContext: ConnectionLogContext = {
       operation: "disconnect",
@@ -881,7 +1002,12 @@ export class ConnectServer {
       };
       this.options.logger?.info(logContext, "oauth authorization started");
 
-      const authorization = await this.options.oauthFlow.startAuthorization({ service, connectionName });
+      const authorization = await this.options.oauthFlow.startAuthorization({
+        service,
+        connectionName,
+        clientConfig: readOAuthClientConfigInput(body),
+        authorizationOptionIds: readOptionalStringArray(body, "authorizationOptionIds"),
+      });
       const authorizationUrl = new URL(authorization.authorizationUrl);
       this.options.logger?.info(
         {
@@ -893,7 +1019,11 @@ export class ConnectServer {
       );
       return context.json(authorization);
     } catch (error) {
-      if (error instanceof OAuthFlowError || error instanceof ConnectionError) {
+      if (
+        error instanceof OAuthClientConfigError ||
+        error instanceof OAuthFlowError ||
+        error instanceof ConnectionError
+      ) {
         this.options.logger?.warn(
           {
             errorCode: error.code,
@@ -903,7 +1033,8 @@ export class ConnectServer {
           },
           "oauth authorization failed",
         );
-        return jsonError(context, error.code === "unknown_service" ? 404 : 400, error.code, error.message);
+        const status = error.code === "unknown_service" ? 404 : 400;
+        return jsonError(context, status, error.code, error.message);
       }
 
       throw error;
@@ -924,14 +1055,7 @@ export class ConnectServer {
     const created = await this.options.runtimeTokens.createToken(name, readTokenPolicy(body, true));
     return context.json({
       token: created.token,
-      record: {
-        id: created.record.id,
-        name: created.record.name,
-        allowedActions: created.record.allowedActions,
-        blockedActions: created.record.blockedActions,
-        allowedProxies: created.record.allowedProxies,
-        createdAt: created.record.createdAt,
-      },
+      record: summarizeRuntimeToken(created.record),
     });
   }
 
@@ -979,6 +1103,7 @@ export class ConnectServer {
         service,
         clientId: optionalString(body.clientId) ?? "",
         clientSecret: optionalString(body.clientSecret) ?? "",
+        requestedScopes: readOptionalStringArray(body, "requestedScopes"),
         extra: optionalRecord(body.extra),
         secretExtra: optionalRecord(body.secretExtra),
       }),
@@ -1033,7 +1158,14 @@ export class ConnectServer {
       for (const [key, value] of new URL(context.req.url).searchParams) {
         (callbackParameters[key] ??= []).push(value);
       }
-      service = (await this.options.oauthFlow.completeAuthorization({ state, code, callbackParameters })).service;
+      service = (
+        await this.options.oauthFlow.completeAuthorization({
+          state,
+          code,
+          callbackParameters,
+          signal: context.req.raw.signal,
+        })
+      ).service;
       this.options.logger?.info(
         {
           ...logContext,
@@ -1043,12 +1175,13 @@ export class ConnectServer {
       );
     } catch (error) {
       if (error instanceof OAuthFlowError || error instanceof ConnectionError) {
-        this.options.logger?.warn(
+        const cancelled = error instanceof ConnectionError && error.code === "connection_cancelled";
+        this.options.logger?.[cancelled ? "info" : "warn"](
           {
             ...logContext,
             errorCode: error.code,
           },
-          "oauth callback failed",
+          cancelled ? "oauth callback cancelled" : "oauth callback failed",
         );
         return jsonError(context, error.code === "unknown_service" ? 404 : 400, error.code, error.message);
       }
@@ -1075,12 +1208,17 @@ export class ConnectServer {
     } catch (error) {
       if (error instanceof ConnectionError) {
         if (logContext) {
-          this.options.logger?.warn(
+          const cancelled = error.code === "connection_cancelled";
+          this.options.logger?.[cancelled ? "info" : "warn"](
             {
               ...logContext,
               errorCode: error.code,
             },
-            logContext.operation === "disconnect" ? "connection disconnect failed" : "connection failed",
+            cancelled
+              ? "connection cancelled"
+              : logContext.operation === "disconnect"
+                ? "connection disconnect failed"
+                : "connection failed",
           );
         }
         return jsonError(context, mapConnectionErrorStatus(error), error.code, error.message);
@@ -1136,6 +1274,30 @@ export class ConnectServer {
   }
 }
 
+function readOAuthClientConfigInput(body: Record<string, unknown>): OAuthClientConfigInput | undefined {
+  const keys = ["clientId", "clientSecret", "requestedScopes", "extra", "secretExtra"];
+  if (!keys.some((key) => key in body)) {
+    return undefined;
+  }
+
+  return {
+    clientId: optionalString(body.clientId) ?? "",
+    clientSecret: optionalString(body.clientSecret) ?? "",
+    requestedScopes: readOptionalStringArray(body, "requestedScopes"),
+    extra: optionalRecord(body.extra),
+    secretExtra: optionalRecord(body.secretExtra),
+  };
+}
+
+function readOptionalStringArray(body: Record<string, unknown>, fieldName: string): string[] | undefined {
+  if (!(fieldName in body)) return undefined;
+  return requiredStringArray(
+    body[fieldName],
+    fieldName,
+    (message) => new HttpRequestError("invalid_input", `${message}.`),
+  );
+}
+
 interface ConnectionLogContext {
   operation: "connect" | "disconnect";
   path: string;
@@ -1168,7 +1330,6 @@ function readConnectionName(context: Context, body?: Record<string, unknown>): s
   return (
     optionalString(body?.connectionName) ??
     optionalString(body?.alias) ??
-    optionalString(context.req.header("x-oomol-connector-alias")) ??
     optionalString(context.req.header("x-oo-connector-alias")) ??
     optionalString(context.req.query("connectionName")) ??
     optionalString(context.req.query("alias"))
@@ -1219,7 +1380,7 @@ interface RuntimeActionSearchResult {
 }
 
 function serializeActionSearchResult(
-  result: ActionSearchResult,
+  result: ActionSearchDocument,
   action: RuntimeActionDefinition,
   authenticated: boolean,
 ): RuntimeActionSearchResult {

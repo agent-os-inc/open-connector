@@ -7,8 +7,6 @@ import { quickBooksOnlineAccountingScope } from "./scopes.ts";
 const service = "quickbooks_online";
 const permissions = [quickBooksOnlineAccountingScope] as const;
 
-export type QuickBooksOnlineActionName = "get_company_info" | "get_profit_and_loss" | "get_balance_sheet";
-
 const date = s.string({
   format: "date",
   pattern: "^\\d{4}-\\d{2}-\\d{2}$",
@@ -66,7 +64,7 @@ const reportOutput = s.object(
   { optional: ["as_of_date", "currency"], defs: { reportRow } },
 );
 
-export const quickBooksOnlineActions: readonly ProviderActionDefinition<QuickBooksOnlineActionName>[] = [
+export const quickBooksOnlineActions: readonly ProviderActionDefinition[] = [
   defineProviderAction(service, {
     name: "get_company_info",
     description: "Get a redacted summary of the connected QuickBooks Online company.",

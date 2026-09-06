@@ -1,12 +1,15 @@
-# AgentOS tenant transit files
+# AgentOS tenant files on main
 
-This branch preserves OpenConnector v1.3.4 at
-`ef9ef5b6cf1f8c15368f0a62fc2517780aebc12a` plus the reviewed TEN-609
-QuickBooks/Gmail/Alchemy source tree
-`73bf9fedb4b46191a883ed8cd959c49bab0dd50d`. It backports the upstream S3
-and streaming multipart implementation from upstream commit
-`5a0db6f07a70d553b02c33a85238c8710d5680d2`, then enforces tenant ownership.
-It does not upgrade the runtime to upstream v1.5 or migrate SQLite.
+This integration preserves upstream v1.5.0 at 5a0db6f07a70d553b02c33a85238c8710d5680d2
+and ports the reviewed tenant/provider changes from the agentos-v1.3.4 maintenance branch.
+SQLite remains the AgentOS deployment backend; upstream runtime capabilities remain available.
+
+The fork publishes `ghcr.io/agent-os-inc/open-connector:sha-<full source SHA>` on main pushes,
+using `docker/Dockerfile.agentos`, native GitHub ARM64 runners, and linux/arm64 only.
+PRs build the same image without publishing. No version tag or GitHub release is required.
+The publishing run records the immutable digest, SBOM/provenance and verified Cosign signature.
+Infra must explicitly review this fork workflow signing identity before accepting its digest;
+it is different from the historical infrastructure-repository publisher. Publishing does not deploy.
 
 ## Contract
 

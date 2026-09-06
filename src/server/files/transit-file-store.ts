@@ -13,6 +13,11 @@ export interface TransitFileInfo extends TransitFileDescriptor {
   sizeBytes: number;
 }
 
+/** Stored side-car metadata for one transit file. */
+export interface TransitFileMetadata extends TransitFileInfo {
+  createdAt: string;
+}
+
 export interface StagedTransitFile {
   path: string;
   sizeBytes: number;
@@ -21,7 +26,7 @@ export interface StagedTransitFile {
 }
 
 export interface ITransitFileService extends TransitFileStore {
-  response?(fileId: string): Promise<Response>;
+  response(fileId: string): Promise<Response>;
   cleanupExpired(): Promise<void>;
   refreshDownloadUrls?(value: unknown): Promise<unknown>;
 }
@@ -181,6 +186,16 @@ export function randomHex(byteLength: number): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** Key holding a transit file's bytes, shared by the KV, R2 and S3 backends. */
+export function objectKey(fileId: string): string {
+  return `transit/${fileId}`;
+}
+
+/** Key holding a transit file's side-car metadata, shared by the KV and R2 backends. */
+export function metadataKey(fileId: string): string {
+  return `transit/${fileId}.meta.json`;
+}
+
 /** Trim a stored name and MIME type, substituting the matching fallback for a missing or blank value. */
 export function normalizeDescriptor(
   input: Partial<TransitFileDescriptor>,
@@ -192,14 +207,13 @@ export function normalizeDescriptor(
   };
 }
 
-export type { TransitFileRead, TransitFileUpload } from "../../core/types.ts";
-
-export function createTransitFileResponse(file: TransitFileRead): Response {
-  return new Response(file.file.stream(), {
-    headers: {
-      "content-length": String(file.sizeBytes),
-      "content-type": file.mimeType,
-      "content-disposition": contentDispositionForFileName(file.name),
-    },
-  });
+/** Decode a stored metadata document, filling in every field a backend may have written partially or not at all. */
+export function normalizeMetadata(input: Partial<TransitFileMetadata>): TransitFileMetadata {
+  return {
+    ...normalizeDescriptor(input),
+    createdAt: typeof input.createdAt === "string" && input.createdAt ? input.createdAt : new Date().toISOString(),
+    sizeBytes: typeof input.sizeBytes === "number" && Number.isFinite(input.sizeBytes) ? input.sizeBytes : 0,
+  };
 }
+
+export type { TransitFileRead, TransitFileUpload } from "../../core/types.ts";
