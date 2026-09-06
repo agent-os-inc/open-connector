@@ -40,6 +40,7 @@ import { actionInputMaxDepth, hashActionRequest, hashIdempotencyKey } from "./ac
 import { ActionRunner } from "./actions/action-runner.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
 import { ConnectServer } from "./connect-server.ts";
+import { requireTenant } from "./files/tenant-context.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { decodeRunLogCursor, encodeRunLogCursor } from "./storage/runtime-store.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
@@ -3067,6 +3068,7 @@ interface TestAuthOptions {
 }
 
 interface CreateTestServerOptions {
+  tenantFiles?: boolean;
   auth?: TestAuthOptions;
   actionPolicy?: ActionPolicyService;
   actionSearch?: ActionSearchIndexProvider;
@@ -3122,6 +3124,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
   const staticRoot = typeof options.staticRoot === "string" ? options.staticRoot : undefined;
 
   return new ConnectServer({
+    tenantFiles: options.tenantFiles,
     catalog,
     providerLoader,
     connections,
@@ -3572,3 +3575,76 @@ function createRunLog(id: string, startedAt: string): RunLog {
     ok: true,
   };
 }
+
+describe("AgentOS tenant authority", () => {
+  const runtimeToken = "r".repeat(32);
+  const adminToken = "a".repeat(32);
+  const tenantA = "11111111-1111-4111-8111-111111111111";
+  const tenantB = "22222222-2222-4222-8222-222222222222";
+
+  it("isolates simultaneous action context and idempotency and rejects missing authority", async () => {
+    const tenants: string[] = [];
+    class TenantLoader extends EchoProviderLoader {
+      override async loadActionExecutor(): Promise<ActionExecutor> {
+        return async () => {
+          const tenant = requireTenant();
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          expect(requireTenant()).toBe(tenant);
+          tenants.push(tenant);
+          return { ok: true, output: { tenant } };
+        };
+      }
+    }
+    const app = createTestServer([{ ...apiKeyProvider, actions: [echoAction] }], {
+      tenantFiles: true,
+      auth: { adminToken, runtimeToken },
+      providerLoader: new TenantLoader(),
+    }).createApp();
+    const connected = await app.request("/api/connections/example", {
+      method: "PUT",
+      headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ authType: "api_key", values: { apiKey: "fixture-key" } }),
+    });
+    expect(connected.status).toBe(200);
+    const invoke = (tenant: string, token = runtimeToken) =>
+      app.request("/v1/actions/example.echo", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "x-agentos-tenant-id": tenant,
+          "content-type": "application/json",
+          "idempotency-key": "same-operation",
+        },
+        body: JSON.stringify({ input: {} }),
+      });
+    expect((await invoke(tenantA, adminToken)).status).toBe(401);
+    expect((await invoke("")).status).toBe(400);
+    expect((await invoke("../tenant")).status).toBe(400);
+    expect(tenants).toEqual([]);
+    const results = await Promise.all([invoke(tenantA), invoke(tenantB)]);
+    expect(results.map((x) => x.status)).toEqual([200, 200]);
+    expect(await results[0].json()).toMatchObject({ success: true, data: { tenant: tenantA } });
+    expect(await results[1].json()).toMatchObject({ success: true, data: { tenant: tenantB } });
+    expect(tenants.sort()).toEqual([tenantA, tenantB]);
+    expect(await (await invoke(tenantA)).json()).toMatchObject({ data: { tenant: tenantA } });
+    expect(tenants).toHaveLength(2);
+    for (const path of ["/mcp", "/v1/proxy/example"]) {
+      expect(
+        (
+          await app.request(path, {
+            method: "POST",
+            headers: { authorization: `Bearer ${runtimeToken}`, "x-agentos-tenant-id": tenantA },
+          })
+        ).status,
+      ).toBe(403);
+    }
+    expect((await app.request("/api/files/" + "a".repeat(32))).status).toBe(401);
+    expect(
+      (
+        await app.request("/api/files/" + "a".repeat(32), {
+          headers: { authorization: `Bearer ${runtimeToken}`, "x-agentos-tenant-id": tenantA },
+        })
+      ).headers.get("cache-control"),
+    ).toBe("private, no-store");
+  });
+});

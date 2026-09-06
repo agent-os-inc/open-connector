@@ -9,6 +9,8 @@ import { executorModules } from "../providers/registry.generated.ts";
 import { createRuntimeJwtVerifier } from "./api/runtime-jwt.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
 import { createConnectApp } from "./connect-app.ts";
+import { createNodeTransitFileUpload, cleanupStagedTransitFiles } from "./files/node-transit-file-upload.ts";
+import { createS3TransitClient, S3TransitFileService } from "./files/s3-transit-files.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { logger } from "./logger.ts";
 import { createSecretCodec } from "./secrets/secret-codec.ts";
@@ -49,18 +51,50 @@ const runtimeDatabase = new SqliteRuntimeDatabase(join(dataDir, "connect.sqlite"
   secretCodec,
   runLimit,
 });
-const transitFiles = new TransitFileService({
-  rootDir: join(dataDir, "files"),
-  publicOrigin,
-  ttlSeconds: transitFileTtlSeconds,
-  maxBytes: transitFileMaxBytes,
-});
+const tenantFiles = process.env.OOMOL_CONNECT_TRANSIT_FILE_BACKEND === "s3";
+if (
+  process.env.OOMOL_CONNECT_TRANSIT_FILE_BACKEND &&
+  !["local", "s3"].includes(process.env.OOMOL_CONNECT_TRANSIT_FILE_BACKEND)
+) {
+  throw new Error("Unsupported transit file backend.");
+}
+if (
+  tenantFiles &&
+  (process.env.OOMOL_CONNECT_S3_ACCESS_KEY_ID ||
+    process.env.OOMOL_CONNECT_S3_SECRET_ACCESS_KEY ||
+    process.env.AWS_ACCESS_KEY_ID ||
+    process.env.AWS_SECRET_ACCESS_KEY)
+) {
+  throw new Error("Tenant S3 storage requires workload identity, not static S3 credentials.");
+}
+const transitFiles = tenantFiles
+  ? new S3TransitFileService({
+      client: createS3TransitClient({ region: process.env.AWS_REGION ?? "us-east-2", forcePathStyle: false }),
+      bucket: requiredEnv("OOMOL_CONNECT_S3_BUCKET"),
+      kmsKeyId: requiredEnv("OOMOL_CONNECT_S3_KMS_KEY_ID"),
+      publicOrigin,
+      ttlSeconds: transitFileTtlSeconds,
+      maxBytes: transitFileMaxBytes,
+    })
+  : new TransitFileService({
+      rootDir: join(dataDir, "files"),
+      publicOrigin,
+      ttlSeconds: transitFileTtlSeconds,
+      maxBytes: transitFileMaxBytes,
+    });
 await transitFiles.cleanupExpired();
+const transitFileTempDir = join(dataDir, "tmp", "transit-files");
+await cleanupStagedTransitFiles(transitFileTempDir, transitFileTtlSeconds * 1000);
 const { app, runtimeAuthConfigured } = await createConnectApp({
   catalog,
   providerLoader,
   runtimeDatabase,
   transitFiles,
+  tenantFiles,
+  uploadTransitFile:
+    transitFiles instanceof S3TransitFileService
+      ? createNodeTransitFileUpload({ transitFiles, tempDir: transitFileTempDir, tenantScoped: true })
+      : undefined,
   publicOrigin,
   secretCodec,
   adminToken,
@@ -125,4 +159,10 @@ function readPositiveIntegerEnv(name: string, fallback: number): number {
 
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is required.`);
+  return value;
 }

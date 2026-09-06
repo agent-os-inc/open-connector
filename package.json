@@ -29,11 +29,14 @@
     "fix-check": "npm run fix && npm run typecheck"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1111.0",
+    "@aws-sdk/s3-request-presigner": "^3.1111.0",
     "@cfworker/json-schema": "^4.1.1",
     "@hono/node-server": "^2.0.10",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@scalar/hono-api-reference": "^0.11.7",
     "ali-oss": "^6.23.0",
+    "busboy": "^1.6.0",
     "fast-xml-parser": "^5.10.1",
     "hono": "^4.12.34",
     "imapflow": "^1.4.6",
@@ -52,6 +55,7 @@
   "devDependencies": {
     "@hyrious/configs": "^0.1.6",
     "@types/ali-oss": "^6.23.3",
+    "@types/busboy": "^1.5.4",
     "@types/mailparser": "^3.4.6",
     "@types/mdast": "^4.0.4",
     "@types/node": "^26.0.1",
@@ -65,7 +69,7 @@
   },
   "overrides": {
     "deepmerge-ts": "8.0.1",
-    "fast-uri": "4.1.2",
+    "fast-uri": "4.1.4",
     "ip-address": "10.5.0",
     "nanoid": "3.3.18"
   },

@@ -2,6 +2,7 @@ import type { CatalogStore, RuntimeActionDefinition } from "../catalog-store.ts"
 import type { ConnectionService } from "../connection-service.ts";
 import type { ActionPolicySnapshot } from "../core/action-policy.ts";
 import type { ActionSearchIndexProvider, ActionSearchResult } from "../core/action-search.ts";
+import type { TransitFileUpload } from "../core/types.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { LocalAuthOptions } from "./api/auth.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
@@ -51,6 +52,7 @@ import {
   writeRuntimeFailure,
   writeRuntimeSuccess,
 } from "./api/runtime-api.ts";
+import { createTenantFileMiddleware, currentTenant } from "./files/tenant-context.ts";
 import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
 import { decodeRunLogCursor } from "./storage/runtime-store.ts";
@@ -68,6 +70,8 @@ export interface IConnectServerOptions {
   actions: ActionRunner;
   idempotency: IIdempotencyStore;
   transitFiles: ITransitFileService;
+  tenantFiles?: boolean;
+  uploadTransitFile?: (request: Request) => Promise<TransitFileUpload>;
   staticRoot?: string;
   auth?: LocalAuthOptions;
   actionPolicy?: ActionPolicyService;
@@ -108,6 +112,13 @@ export class ConnectServer {
 
     app.use("*", async (context, next) => {
       await next();
+      if (
+        this.options.tenantFiles &&
+        (context.req.path === "/api/files" || context.req.path.startsWith("/api/files/"))
+      ) {
+        context.header("Cache-Control", "private, no-store");
+        return;
+      }
       const cachePolicy = getResponseCachePolicy(context.req.method, context.req.path, context.res.status);
       if (cachePolicy) {
         context.header("Cache-Control", cachePolicy.cacheControl);
@@ -127,7 +138,10 @@ export class ConnectServer {
       // (e.g. transit file downloads).
       app.use("/api/*", compress());
     }
-    app.use("*", createLocalAuthMiddleware(auth));
+    if (this.options.tenantFiles) {
+      app.use("*", createTenantFileMiddleware(auth.runtimeToken));
+    }
+    app.use("*", createLocalAuthMiddleware({ ...auth, tenantFiles: this.options.tenantFiles }));
     app.get("/v1/health", (context) => writeRuntimeSuccess(context, { ok: true, runtime: "oomol-connect" }));
     app.get("/v1/providers", (context) => this.listRuntimeProviders(context));
     app.get("/v1/actions", (context) => this.listRuntimeActions(context));
@@ -251,6 +265,9 @@ export class ConnectServer {
 
   private async createTransitFile(context: Context): Promise<Response> {
     try {
+      if (this.options.uploadTransitFile) {
+        return context.json(await this.options.uploadTransitFile(context.req.raw));
+      }
       const form = await context.req.raw.formData();
       const file = form.get("file");
       if (!(file instanceof File)) {
@@ -491,7 +508,8 @@ export class ConnectServer {
     }
 
     const now = new Date();
-    const keyHash = hashIdempotencyKey(idempotencyKey.key);
+    const tenant = currentTenant();
+    const keyHash = hashIdempotencyKey(tenant ? `${tenant}:${idempotencyKey.key}` : idempotencyKey.key);
     let requestHash: string;
     try {
       requestHash = hashActionRequest({
@@ -537,6 +555,15 @@ export class ConnectServer {
       });
     }
     if (claim.kind === "completed") {
+      if (claim.response.body.success && this.options.transitFiles.refreshDownloadUrls) {
+        try {
+          const data = await this.options.transitFiles.refreshDownloadUrls(claim.response.body.data);
+          return writeRuntimeActionHttpResult(context, { status: 200, body: { ...claim.response.body, data } });
+        } catch (error) {
+          if (!(error instanceof TransitFileError)) throw error;
+          return writeRuntimeFailure(context, { status: error.status, errorCode: error.code, message: error.message });
+        }
+      }
       return writeRuntimeActionHttpResult(context, claim.response);
     }
 
