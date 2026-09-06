@@ -42,7 +42,7 @@ export interface S3TransitFileCredentials {
   sessionToken?: string;
 }
 
-/** S3 client settings as the Node server reads them from OOMOL_CONNECT_S3_*. */
+/** Explicit S3 client settings; the AgentOS server uses the default credential chain. */
 export interface S3TransitClientOptions {
   region: string;
   endpoint?: string;
@@ -52,8 +52,7 @@ export interface S3TransitClientOptions {
 
 /**
  * Build the S3 client for the transit-file backend. Checksum calculation stays opt-in so S3-compatible stores
- * without CRC support keep working. The server imports this module only when OOMOL_CONNECT_TRANSIT_FILE_BACKEND=s3,
- * so the AWS SDK stays out of the default startup graph.
+ * without CRC support keep working. The Node server imports this module eagerly.
  */
 export function createS3TransitClient(options: S3TransitClientOptions): S3Client {
   return new S3Client({

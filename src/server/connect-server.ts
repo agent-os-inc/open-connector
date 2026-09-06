@@ -508,9 +508,8 @@ export class ConnectServer {
     }
 
     const now = new Date();
-    const keyHash = hashIdempotencyKey(
-      currentTenant() ? `${currentTenant()}:${idempotencyKey.key}` : idempotencyKey.key,
-    );
+    const tenant = currentTenant();
+    const keyHash = hashIdempotencyKey(tenant ? `${tenant}:${idempotencyKey.key}` : idempotencyKey.key);
     let requestHash: string;
     try {
       requestHash = hashActionRequest({

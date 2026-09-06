@@ -69,7 +69,7 @@ local files. SQLite and provider credentials remain on the existing PVC.
 
 Build `docker/Dockerfile.agentos` from an exact reviewed fork commit with
 `VCS_REF` set to that commit. The infrastructure owner retains the existing
-protected multi-architecture image build/sign/attestation workflow and
+protected linux/arm64 image build/sign/attestation workflow and
 `ghcr.io/agent-os-inc/openconnector-evaluation` registry. Publish and pin the
 resulting immutable digest; a source revision or local test is not a published
 image. Retain the current Node image digest, non-root UID 10001, production
