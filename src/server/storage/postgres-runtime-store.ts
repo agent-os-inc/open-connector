@@ -290,6 +290,38 @@ class PostgresConnectionStore implements IConnectionStore {
     };
   }
 
+  async create(
+    service: string,
+    connectionName: string,
+    credential: ResolvedCredential,
+  ): Promise<StoredConnection | undefined> {
+    const result = await this.pool.query<RuntimeRow>(
+      `insert into connections (id, revision, service, connection_name, value, updated_at)
+       values ($1, $2, $3, $4, $5, $6)
+       on conflict(service, connection_name) do nothing returning id, revision`,
+      [
+        crypto.randomUUID(),
+        crypto.randomUUID(),
+        service,
+        connectionName,
+        await this.secretCodec.encode(JSON.stringify(credential)),
+        new Date().toISOString(),
+      ],
+    );
+    const row = result.rows[0];
+    return row
+      ? { id: readString(row, "id"), revision: readString(row, "revision"), service, connectionName, credential }
+      : undefined;
+  }
+
+  async deleteIfRevision(input: StoredConnection): Promise<boolean> {
+    const result = await this.pool.query(
+      "delete from connections where service = $1 and connection_name = $2 and id = $3 and revision = $4 returning id",
+      [input.service, input.connectionName, input.id, input.revision],
+    );
+    return result.rowCount === 1;
+  }
+
   async updateCredential(input: StoredConnection): Promise<boolean> {
     const result = await this.pool.query(
       `

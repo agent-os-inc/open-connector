@@ -11,6 +11,7 @@ import type {
   TransitFileUpload,
 } from "../core/types.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../oauth/oauth-client-config-service.ts";
+import type { IOAuthCredentialRefresher } from "../oauth/oauth-credential-refresh-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../oauth/oauth-flow-service.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
@@ -42,6 +43,7 @@ import { actionInputMaxDepth, hashActionRequest, hashIdempotencyKey } from "./ac
 import { ActionRunner } from "./actions/action-runner.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
 import { ConnectServer } from "./connect-server.ts";
+import { requireTenant } from "./files/tenant-context.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { AesGcmSecretCodec } from "./secrets/secret-codec.ts";
 import { decodeRunLogCursor, encodeRunLogCursor } from "./storage/runtime-store.ts";
@@ -134,6 +136,88 @@ afterEach(() => {
 });
 
 describe("ConnectServer", () => {
+  it("returns exactly one redacted connection for the required admin alias header", async () => {
+    const app = createTestServer([apiKeyProvider], { auth: { adminToken: "admin-token" } }).createApp();
+    for (const alias of ["finance", "operations"]) {
+      const connected = await app.request("/api/connections/example", {
+        method: "PUT",
+        headers: { authorization: "Bearer admin-token", "content-type": "application/json" },
+        body: JSON.stringify({ authType: "api_key", alias, values: { apiKey: `secret-${alias}` } }),
+      });
+      expect(connected.status).toBe(200);
+    }
+
+    const response = await app.request("/api/connections/example", {
+      headers: { authorization: "Bearer admin-token", "X-OO-Connector-Alias": "finance" },
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      service: "example",
+      connectionName: "finance",
+      configured: true,
+    });
+    expect(JSON.stringify(body)).not.toContain("secret-finance");
+  });
+
+  it("rejects missing or ambiguous connection alias lookups and returns 404 for an absent alias", async () => {
+    const app = createTestServer([apiKeyProvider]).createApp();
+
+    const missing = await app.request("/api/connections/example");
+    const ambiguous = await app.request("/api/connections/example", {
+      headers: { "X-OO-Connector-Alias": "finance,operations" },
+    });
+    const absent = await app.request("/api/connections/example", {
+      headers: { "X-OO-Connector-Alias": "finance" },
+    });
+
+    expect(missing.status).toBe(400);
+    expect(ambiguous.status).toBe(400);
+    expect(absent.status).toBe(404);
+  });
+
+  it("returns the shared 409 status for a quarantined connection DELETE", async () => {
+    const provider: ProviderDefinition = {
+      ...oauthProvider,
+      auth: [
+        {
+          type: "oauth2",
+          authorizationUrl: "https://example.com/oauth/authorize",
+          tokenUrl: "https://example.com/oauth/token",
+          revocationUrl: "https://example.com/revoke",
+          revocationMode: "required",
+          scopes: ["read"],
+          tokenEndpointAuthMethod: "client_secret_post",
+        },
+      ],
+    };
+    const store = new MemoryConnectionStore();
+    await store.set("oauth_example", "default", {
+      authType: "oauth2",
+      accessToken: "access-token",
+      tokenType: "Bearer",
+      refreshToken: "refresh-token",
+      profile: { accountId: "oauth_example:oauth2", displayName: "Example", grantedScopes: [] },
+      metadata: {
+        oauthDisconnectLease: {
+          owner: "lease-owner",
+          phase: "outcome_unknown",
+          startedAt: new Date().toISOString(),
+        },
+      },
+    });
+    const app = createTestServer([provider], {
+      connectionStore: store,
+      oauthCredentials: { refresh: async (_service, value) => value, revoke: async () => undefined },
+    }).createApp();
+
+    const response = await app.request("/api/connections/oauth_example", { method: "DELETE" });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "oauth_revocation_quarantined" } });
+  });
+
   it("rejects connections for providers unavailable in the current runtime", async () => {
     const app = createTestServer([catalogOnlyProvider]).createApp();
 
@@ -1246,7 +1330,29 @@ describe("ConnectServer", () => {
     });
     expect(document.components.schemas.ConnectionSummary).toMatchObject({
       properties: { id: expect.any(Object) },
-      required: expect.arrayContaining(["id"]),
+      required: expect.arrayContaining(["id", "connectionName", "default"]),
+    });
+    expect(document.paths["/api/connections/{service}"]).toMatchObject({
+      delete: {
+        responses: {
+          200: {
+            content: {
+              "application/json": {
+                schema: {
+                  anyOf: expect.arrayContaining([
+                    expect.objectContaining({
+                      required: expect.arrayContaining(["service", "connectionName", "configured"]),
+                    }),
+                  ]),
+                },
+              },
+            },
+          },
+          400: expect.any(Object),
+          409: expect.any(Object),
+          404: expect.any(Object),
+        },
+      },
     });
     expect(document.paths["/v1/actions/{actionId}"]?.post?.responses).toMatchObject({
       200: {
@@ -1320,7 +1426,7 @@ describe("ConnectServer", () => {
     await expect(response.json()).resolves.toEqual({
       error: {
         code: "oauth_provider_error",
-        message: 'OAuth provider returned error "invalid_scope": The requested scope is invalid.',
+        message: "OAuth provider denied or could not complete authorization.",
       },
     });
   });
@@ -3651,6 +3757,10 @@ interface TestAuthOptions {
 }
 
 interface CreateTestServerOptions {
+  allowedCustomOAuth?: string[];
+  secretCodec?: ISecretCodec;
+  uploadTransitFile?: (request: Request) => Promise<TransitFileUpload>;
+  tenantFiles?: boolean;
   auth?: TestAuthOptions;
   actionPolicy?: ActionPolicyService;
   actionSearch?: ActionSearchIndexProvider;
@@ -3662,9 +3772,8 @@ interface CreateTestServerOptions {
   runs?: MemoryRunLogStore;
   staticRoot?: string | false;
   transitFiles?: TransitFileService;
-  uploadTransitFile?: (request: Request) => Promise<TransitFileUpload>;
-  secretCodec?: ISecretCodec;
-  allowedCustomOAuth?: string[];
+  connectionStore?: IConnectionStore;
+  oauthCredentials?: IOAuthCredentialRefresher;
 }
 
 function createTestServer(providers: ProviderDefinition[], options: CreateTestServerOptions = {}): ConnectServer {
@@ -3677,8 +3786,9 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
   const runs = options.runs ?? new MemoryRunLogStore();
   const connections = new ConnectionService({
     catalog,
+    oauthCredentials: options.oauthCredentials,
     providerLoader,
-    store: new MemoryConnectionStore(),
+    store: options.connectionStore ?? new MemoryConnectionStore(),
   });
   const allowedCustomOAuth = new Set(options.allowedCustomOAuth);
   const isCustomClientConfigAllowed = (service: string): boolean =>
@@ -3710,6 +3820,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
   const staticRoot = typeof options.staticRoot === "string" ? options.staticRoot : undefined;
 
   return new ConnectServer({
+    tenantFiles: options.tenantFiles,
     catalog,
     providerLoader,
     connections,
@@ -3947,6 +4058,15 @@ class MemoryConnectionStore implements IConnectionStore {
     return connection;
   }
 
+  async create(
+    service: string,
+    connectionName: string,
+    credential: ResolvedCredential,
+  ): Promise<StoredConnection | undefined> {
+    if (await this.get(service, connectionName)) return undefined;
+    return this.set(service, connectionName, credential);
+  }
+
   async updateCredential(input: StoredConnection): Promise<boolean> {
     const key = createConnectionKey(input.service, input.connectionName);
     const current = this.store.get(key);
@@ -3957,6 +4077,14 @@ class MemoryConnectionStore implements IConnectionStore {
 
   async delete(service: string, connectionName: string): Promise<void> {
     this.store.delete(createConnectionKey(service, connectionName));
+  }
+
+  async deleteIfRevision(input: StoredConnection): Promise<boolean> {
+    const key = createConnectionKey(input.service, input.connectionName);
+    const current = this.store.get(key);
+    if (current?.id !== input.id || current.revision !== input.revision) return false;
+    this.store.delete(key);
+    return true;
   }
 
   async list(): Promise<StoredConnection[]> {
@@ -4189,3 +4317,76 @@ function createRunLog(id: string, startedAt: string): RunLog {
     ok: true,
   };
 }
+
+describe("AgentOS tenant authority", () => {
+  const runtimeToken = "r".repeat(32);
+  const adminToken = "a".repeat(32);
+  const tenantA = "11111111-1111-4111-8111-111111111111";
+  const tenantB = "22222222-2222-4222-8222-222222222222";
+
+  it("isolates simultaneous action context and idempotency and rejects missing authority", async () => {
+    const tenants: string[] = [];
+    class TenantLoader extends EchoProviderLoader {
+      override async loadActionExecutor(): Promise<ActionExecutor> {
+        return async () => {
+          const tenant = requireTenant();
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          expect(requireTenant()).toBe(tenant);
+          tenants.push(tenant);
+          return { ok: true, output: { tenant } };
+        };
+      }
+    }
+    const app = createTestServer([{ ...apiKeyProvider, actions: [echoAction] }], {
+      tenantFiles: true,
+      auth: { adminToken, runtimeToken },
+      providerLoader: new TenantLoader(),
+    }).createApp();
+    const connected = await app.request("/api/connections/example", {
+      method: "PUT",
+      headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ authType: "api_key", values: { apiKey: "fixture-key" } }),
+    });
+    expect(connected.status).toBe(200);
+    const invoke = (tenant: string, token = runtimeToken) =>
+      app.request("/v1/actions/example.echo", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "x-agentos-tenant-id": tenant,
+          "content-type": "application/json",
+          "idempotency-key": "same-operation",
+        },
+        body: JSON.stringify({ input: {} }),
+      });
+    expect((await invoke(tenantA, adminToken)).status).toBe(401);
+    expect((await invoke("")).status).toBe(400);
+    expect((await invoke("../tenant")).status).toBe(400);
+    expect(tenants).toEqual([]);
+    const results = await Promise.all([invoke(tenantA), invoke(tenantB)]);
+    expect(results.map((x) => x.status)).toEqual([200, 200]);
+    expect(await results[0].json()).toMatchObject({ success: true, data: { tenant: tenantA } });
+    expect(await results[1].json()).toMatchObject({ success: true, data: { tenant: tenantB } });
+    expect(tenants.sort()).toEqual([tenantA, tenantB]);
+    expect(await (await invoke(tenantA)).json()).toMatchObject({ data: { tenant: tenantA } });
+    expect(tenants).toHaveLength(2);
+    for (const path of ["/mcp", "/v1/proxy/example"]) {
+      expect(
+        (
+          await app.request(path, {
+            method: "POST",
+            headers: { authorization: `Bearer ${runtimeToken}`, "x-agentos-tenant-id": tenantA },
+          })
+        ).status,
+      ).toBe(403);
+    }
+    expect((await app.request("/api/files/" + "a".repeat(32))).status).toBe(401);
+    expect(
+      (
+        await app.request("/api/files/" + "a".repeat(32), {
+          headers: { authorization: `Bearer ${runtimeToken}`, "x-agentos-tenant-id": tenantA },
+        })
+      ).headers.get("cache-control"),
+    ).toBe("private, no-store");
+  });
+});

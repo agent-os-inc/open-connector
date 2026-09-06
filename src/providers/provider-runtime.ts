@@ -228,6 +228,8 @@ export interface OAuthProviderContext {
   tokenType?: string;
   accountId?: string;
   providerSecret?: Record<string, unknown>;
+  providerConfig?: Record<string, string>;
+  refreshCredential?: () => Promise<{ accessToken: string; tokenType?: string }>;
   fetcher: ProviderFetch;
   transitFiles?: TransitFileWriter;
   signal?: AbortSignal;
@@ -305,6 +307,13 @@ export function requiredInputString(value: unknown, fieldName: string): string {
  */
 export function requiredResponseRecord(value: unknown, label: string): Record<string, unknown> {
   return requiredRecord(value, label, providerResponseError);
+}
+
+/** Stable overflow error for providers that reject rather than truncate projections. */
+export class ProviderResponseTooLargeError extends ProviderRequestError {
+  constructor() {
+    super(502, "Provider response exceeds the supported projection bounds.");
+  }
 }
 
 export interface ProviderTimeout {
@@ -968,6 +977,15 @@ export async function readTransitFileInput(
  * Map provider runtime failures to the standard action execution result.
  */
 export function toProviderExecutionError(error: unknown, fallbackMessage: string): ExecutionResult {
+  if (error instanceof ProviderResponseTooLargeError) {
+    return {
+      ok: false,
+      error: {
+        code: "provider_response_too_large",
+        message: error.message,
+      },
+    };
+  }
   if (error instanceof ProviderRequestError) {
     return {
       ok: false,
@@ -998,6 +1016,13 @@ export function toProviderExecutionError(error: unknown, fallbackMessage: string
       },
     };
   }
+  const oauthError = readStableOAuthExecutionError(error);
+  if (oauthError) {
+    return {
+      ok: false,
+      error: oauthError,
+    };
+  }
 
   return {
     ok: false,
@@ -1006,6 +1031,23 @@ export function toProviderExecutionError(error: unknown, fallbackMessage: string
       message: fallbackMessage,
     },
   };
+}
+
+function readStableOAuthExecutionError(error: unknown): { code: string; message: string } | undefined {
+  if (!error || typeof error !== "object" || !("code" in error) || typeof error.code !== "string") return undefined;
+  const messages: Record<string, string> = {
+    connection_not_found: "The OAuth connection changed; reconnect and retry.",
+    oauth_authorization_quarantined: "OAuth authorization is incomplete; reconnect before retrying.",
+    oauth_client_config_required: "OAuth client configuration is required before retrying.",
+    oauth_client_mismatch: "OAuth client identity changed; reconnect before retrying.",
+    oauth_refresh_in_progress: "OAuth credential refresh is still in progress; retry shortly.",
+    oauth_refresh_quarantined: "OAuth credential refresh could not be proven; reconnect before retrying.",
+    oauth_refresh_unavailable: "OAuth credential refresh is unavailable; reconnect before retrying.",
+    oauth_token_expired: "The OAuth credential expired; reconnect before retrying.",
+    oauth_token_refresh_failed: "OAuth token refresh failed; reconnect before retrying.",
+  };
+  const message = messages[error.code];
+  return message ? { code: error.code, message } : undefined;
 }
 
 /**
@@ -1100,15 +1142,33 @@ export function defineOAuthProviderExecutors(
         tokenType: credential.tokenType,
         accountId: credential.profile.accountId,
         providerSecret: credential.providerSecret,
+        providerConfig: readStringRecord(credential.metadata.oauthClientExtra),
         fetcher,
         signal: context.signal,
       };
+      if (context.refreshOAuthCredential) {
+        providerContext.refreshCredential = async () => {
+          const refreshed = await context.refreshOAuthCredential!(service, providerContext.accessToken);
+          providerContext.accessToken = refreshed.accessToken;
+          providerContext.tokenType = refreshed.tokenType;
+          return { accessToken: refreshed.accessToken, tokenType: refreshed.tokenType };
+        };
+      }
       if (context.transitFiles) {
         providerContext.transitFiles = context.transitFiles;
       }
       return providerContext;
     },
   });
+}
+
+function readStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const result: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string") result[key] = item;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 /**

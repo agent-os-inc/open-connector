@@ -128,6 +128,10 @@ export type OAuth2AuthDefinition = {
   tokenUrl: string;
   /** Provider token endpoint used to refresh an access token. Defaults to tokenUrl. */
   refreshTokenUrl?: string;
+  /** Provider endpoint used to revoke a token before deleting a connection. */
+  revocationUrl?: string;
+  /** Require successful provider revocation before local deletion. */
+  revocationMode?: "delete_only" | "required";
   /** OAuth scopes joined with spaces into the authorization URL `scope` parameter. */
   scopes: string[];
   /** Optional per-connection scope choices shown by the local console. */
@@ -185,6 +189,29 @@ export type OAuth2AuthDefinition = {
   clientConfigFields?: OAuthClientConfigFieldDefinition[];
   /** How to register the provider OAuth app that supplies the client id and secret. */
   clientSetup?: OAuthClientSetupDefinition;
+  /** Require the provider validator to succeed before the credential is stored. */
+  credentialVerification?: "best_effort" | "required";
+  /** Prevent OAuth completion from replacing an existing alias credential. */
+  connectionWriteMode?: "upsert" | "create_only";
+  /** Replace provider-controlled token errors with fixed local messages. */
+  redactTokenErrors?: boolean;
+  /**
+   * Provider callback parameters that the runtime may persist with the OAuth
+   * credential. Parameters not declared here are ignored. Values are kept in
+   * the encrypted credential and are never returned by connection summaries.
+   */
+  callbackCredentialFields?: Array<{
+    /** Exact OAuth callback query parameter name. */
+    parameter: string;
+    /** Key used inside the runtime-only providerSecret credential object. */
+    key: string;
+    /** Whether authorization must fail when this parameter is absent. */
+    required: boolean;
+    /** Maximum accepted callback value length. Defaults to 255. */
+    maxLength?: number;
+    /** Optional full-value regular expression used to validate the value. */
+    pattern?: string;
+  }>;
 };
 
 export interface OAuthAuthorizationOption {
@@ -345,6 +372,11 @@ export type TransitFileWriter = TransitFileStore;
 export interface ExecutionContext {
   /** Resolve the credential currently configured for a provider service id. */
   getCredential(service: string): Promise<ResolvedCredential | undefined>;
+  /** Force one serialized OAuth refresh after a provider rejects the active access token. */
+  refreshOAuthCredential?(
+    service: string,
+    rejectedAccessToken: string,
+  ): Promise<Extract<ResolvedCredential, { authType: "oauth2" }>>;
   /** Optional local temporary file storage for actions that produce downloadable files. */
   transitFiles?: TransitFileWriter;
   /** Optional cancellation signal propagated from the HTTP request or runner. */

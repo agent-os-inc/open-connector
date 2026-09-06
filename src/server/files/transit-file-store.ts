@@ -28,6 +28,7 @@ export interface StagedTransitFile {
 export interface ITransitFileService extends TransitFileStore {
   response(fileId: string): Promise<Response>;
   cleanupExpired(): Promise<void>;
+  refreshDownloadUrls?(value: unknown): Promise<unknown>;
 }
 
 export interface IStagedTransitFileService extends ITransitFileService {
@@ -214,3 +215,5 @@ export function normalizeMetadata(input: Partial<TransitFileMetadata>): TransitF
     sizeBytes: typeof input.sizeBytes === "number" && Number.isFinite(input.sizeBytes) ? input.sizeBytes : 0,
   };
 }
+
+export type { TransitFileRead, TransitFileUpload } from "../../core/types.ts";

@@ -509,11 +509,13 @@ export function createOpenApiDocument(
           {
             id: jsonSchema.string({ description: "Stable local connection identifier." }),
             service: jsonSchema.string({ description: "Provider service identifier." }),
+            connectionName: jsonSchema.string({ description: "Stable local connection alias." }),
             authType: jsonSchema.string({ description: "Connection authentication type." }),
             configured: jsonSchema.boolean({ description: "Whether the provider is connected." }),
             virtual: jsonSchema.boolean({
               description: "Whether the connection needs no stored secret.",
             }),
+            default: jsonSchema.boolean({ description: "Whether this is the provider's default alias." }),
             profile: jsonSchema.object(
               {
                 accountId: jsonSchema.string({
@@ -535,7 +537,7 @@ export function createOpenApiDocument(
             ),
           },
           {
-            required: ["id", "service", "authType", "configured", "virtual", "profile"],
+            required: ["id", "service", "connectionName", "authType", "configured", "virtual", "default", "profile"],
             description: "Local provider connection summary.",
           },
         ),
@@ -1211,6 +1213,23 @@ function createProxyPath(): Record<string, unknown> {
 
 function createConnectionPath(): Record<string, unknown> {
   return {
+    get: {
+      tags: ["Connections"],
+      summary: "Get one redacted provider connection by alias.",
+      parameters: [
+        {
+          name: "X-OO-Connector-Alias",
+          in: "header",
+          required: true,
+          schema: { type: "string", minLength: 1, maxLength: 64 },
+        },
+      ],
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/ConnectionSummary" }),
+        400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
     put: {
       tags: ["Connections"],
       summary: "Create or replace a local provider connection.",
@@ -1233,6 +1252,29 @@ function createConnectionPath(): Record<string, unknown> {
     delete: {
       tags: ["Connections"],
       summary: "Disconnect a provider.",
+      requestBody: {
+        required: false,
+        content: {
+          "application/json": {
+            schema: jsonSchema.object(
+              {
+                alias: jsonSchema.string({ description: "Connection alias to disconnect." }),
+                forceQuarantined: jsonSchema.boolean({
+                  description: "Delete only an eligible stale provider-revocation quarantine.",
+                }),
+                connectionId: jsonSchema.string({
+                  description: "Exact connection id required when forceQuarantined is true.",
+                }),
+                externalRevocationConfirmed: jsonSchema.boolean({
+                  description:
+                    "Explicit operator confirmation that the provider grant was externally revoked before deleting an ambiguous quarantine.",
+                }),
+              },
+              { required: [], description: "Optional disconnect and quarantine-resolution controls." },
+            ),
+          },
+        },
+      },
       responses: {
         200: jsonResponse({
           anyOf: [
@@ -1240,15 +1282,18 @@ function createConnectionPath(): Record<string, unknown> {
             jsonSchema.object(
               {
                 service: jsonSchema.string(),
+                connectionName: jsonSchema.string(),
                 configured: { const: false, type: "boolean" },
               },
               {
-                required: ["service", "configured"],
+                required: ["service", "connectionName", "configured"],
                 description: "Disconnected provider summary.",
               },
             ),
           ],
         }),
+        400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        409: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
         404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
       },
     },

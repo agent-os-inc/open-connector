@@ -1,8 +1,12 @@
-import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import type { StagedTransitFile, TransitFileUpload } from "./transit-file-store.ts";
+
+import { Hono } from "hono";
+import { readFile, mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupStagedTransitFiles, createNodeTransitFileUpload } from "./node-transit-file-upload.ts";
+import { createTenantFileMiddleware } from "./tenant-context.ts";
 import { TransitFileService } from "./transit-files.ts";
 
 const roots: string[] = [];
@@ -128,13 +132,13 @@ describe("cleanupStagedTransitFiles", () => {
 
 async function createService(options: { maxBytes?: number } = {}): Promise<{
   root: string;
-  service: TransitFileService;
+  service: StagedTestService;
   tempDir: string;
 }> {
   const root = await createRoot();
   return {
     root,
-    service: new TransitFileService({
+    service: new StagedTestService({
       rootDir: join(root, "files"),
       publicOrigin: "http://localhost:3000",
       ttlSeconds: 60,
@@ -155,3 +159,40 @@ function fileRequest(contents: string, name: string, mimeType = "application/oct
   form.set("file", new File([contents], name, { type: mimeType }));
   return new Request("http://localhost/api/files", { method: "POST", body: form });
 }
+
+// The pinned local backend predates streaming uploads; exercise the parser
+// using a real on-disk consumer while production streams the path to S3.
+class StagedTestService extends TransitFileService {
+  async createFromPath(file: StagedTransitFile): Promise<TransitFileUpload> {
+    return this.create(new File([await readFile(file.path)], file.name, { type: file.mimeType }));
+  }
+}
+
+it("isolates staging by authenticated tenant and removes temporary bytes", async () => {
+  const { service, tempDir } = await createService();
+  const tenant = "11111111-1111-4111-8111-111111111111";
+  const token = "r".repeat(32);
+  const original = service.createFromPath.bind(service);
+  const staged = vi.spyOn(service, "createFromPath").mockImplementation(async (file) => {
+    expect(file.path.startsWith(join(tempDir, tenant) + "/")).toBe(true);
+    expect((await stat(file.path)).mode & 0o777).toBe(0o600);
+    expect((await stat(join(tempDir, tenant))).mode & 0o777).toBe(0o700);
+    return original(file);
+  });
+  const upload = createNodeTransitFileUpload({ transitFiles: service, tempDir, tenantScoped: true });
+  const app = new Hono();
+  app.use("*", createTenantFileMiddleware(token));
+  app.post("/api/files", async (context) => context.json(await upload(context.req.raw)));
+  const request = fileRequest("private", "file.txt");
+  request.headers.set("authorization", `Bearer ${token}`);
+  request.headers.set("x-agentos-tenant-id", tenant);
+  expect((await app.request(request)).status).toBe(200);
+  expect(staged).toHaveBeenCalledOnce();
+  expect(await readdir(join(tempDir, tenant))).toEqual([]);
+  const expired = join(tempDir, tenant, `${"c".repeat(32)}.tmp`);
+  await writeFile(expired, "interrupted upload");
+  const old = new Date(Date.now() - 120_000);
+  await utimes(expired, old, old);
+  await cleanupStagedTransitFiles(tempDir, 60_000);
+  expect(await readdir(join(tempDir, tenant))).toEqual([]);
+});

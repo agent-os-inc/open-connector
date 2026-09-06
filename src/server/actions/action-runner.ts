@@ -114,7 +114,7 @@ export class ActionRunner {
               ? (actionInput) => this.options.marketplace!.execute(action.id, actionInput, input.signal)
               : executor,
             input.input,
-            this.createExecutionContext(connection.getCredential, input.signal),
+            this.createExecutionContext(connection, input.signal),
           );
           if (input.signal?.aborted) {
             result = cancelledExecutionResult();
@@ -200,14 +200,13 @@ export class ActionRunner {
     return this.options.runs.get(id);
   }
 
-  private createExecutionContext(
-    getCredential: ExecutionConnection["getCredential"],
-    signal: AbortSignal | undefined,
-  ): ExecutionContext {
+  private createExecutionContext(connection: ExecutionConnection, signal?: AbortSignal): ExecutionContext {
     const context: ExecutionContext = {
-      getCredential,
+      getCredential: connection.getCredential,
       signal,
     };
+    if (connection.refreshOAuthCredential) context.refreshOAuthCredential = connection.refreshOAuthCredential;
+    if (signal) context.signal = signal;
     if (this.options.transitFiles) {
       context.transitFiles = this.options.transitFiles;
     }

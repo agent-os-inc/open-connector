@@ -23,6 +23,7 @@ export interface ConnectAppOptions {
   providerLoader: IProviderLoader;
   runtimeDatabase: RuntimeDatabase;
   transitFiles: ITransitFileService;
+  tenantFiles?: boolean;
   uploadTransitFile?: (request: Request) => Promise<TransitFileUpload>;
   publicOrigin: string;
   secretCodec: ISecretCodec;
@@ -43,6 +44,9 @@ export interface ConnectApp {
 }
 
 export async function createConnectApp(options: ConnectAppOptions): Promise<ConnectApp> {
+  if (options.tenantFiles && (!options.adminToken || !options.secretCodec.encrypted)) {
+    throw new Error("Tenant files require admin authentication and encrypted runtime storage.");
+  }
   const marketplace = new MarketplaceService({
     catalog: options.catalog,
     store: options.runtimeDatabase.marketplaceStore,
@@ -95,6 +99,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       actions,
       idempotency: options.runtimeDatabase.idempotencyStore,
       transitFiles: options.transitFiles,
+      tenantFiles: options.tenantFiles,
       uploadTransitFile: options.uploadTransitFile,
       runtimeTokens,
       runtimePolicyStore: options.runtimeDatabase.runtimePolicyStore,

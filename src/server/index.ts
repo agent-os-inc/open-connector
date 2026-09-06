@@ -148,7 +148,12 @@ async function main(): Promise<void> {
       providerLoader: new ProviderLoader(executorModules),
       runtimeDatabase,
       transitFiles,
-      uploadTransitFile: createNodeTransitFileUpload({ transitFiles, tempDir: transitFileTempDir }),
+      tenantFiles: process.env.OOMOL_CONNECT_TRANSIT_FILE_BACKEND === "s3",
+      uploadTransitFile: createNodeTransitFileUpload({
+        transitFiles,
+        tempDir: transitFileTempDir,
+        tenantScoped: process.env.OOMOL_CONNECT_TRANSIT_FILE_BACKEND === "s3",
+      }),
       publicOrigin,
       secretCodec,
       adminToken,
@@ -266,30 +271,25 @@ async function createTransitFileService(): Promise<IStagedTransitFileService> {
         maxBytes: transitFileMaxBytes,
       });
     case "s3": {
-      const accessKeyId = optionalEnv("OOMOL_CONNECT_S3_ACCESS_KEY_ID");
-      const secretAccessKey = optionalEnv("OOMOL_CONNECT_S3_SECRET_ACCESS_KEY");
-      if (Boolean(accessKeyId) !== Boolean(secretAccessKey)) {
-        throw new Error(
-          "OOMOL_CONNECT_S3_ACCESS_KEY_ID and OOMOL_CONNECT_S3_SECRET_ACCESS_KEY must be configured together.",
-        );
+      if (
+        [
+          "OOMOL_CONNECT_S3_ACCESS_KEY_ID",
+          "OOMOL_CONNECT_S3_SECRET_ACCESS_KEY",
+          "AWS_ACCESS_KEY_ID",
+          "AWS_SECRET_ACCESS_KEY",
+        ].some((name) => process.env[name])
+      ) {
+        throw new Error("Tenant S3 storage requires workload identity, not static S3 credentials.");
       }
 
       // @aws-sdk/client-s3 is loaded only for this backend; the default local backend never pays for it.
       const { createS3TransitClient, S3TransitFileService } = await import("./files/s3-transit-files.ts");
       return new S3TransitFileService({
         client: createS3TransitClient({
-          region: optionalEnv("OOMOL_CONNECT_S3_REGION") ?? "us-east-1",
-          endpoint: optionalEnv("OOMOL_CONNECT_S3_ENDPOINT"),
-          forcePathStyle: parseBooleanEnv("OOMOL_CONNECT_S3_FORCE_PATH_STYLE"),
-          credentials:
-            accessKeyId && secretAccessKey
-              ? {
-                  accessKeyId,
-                  secretAccessKey,
-                  sessionToken: optionalEnv("OOMOL_CONNECT_S3_SESSION_TOKEN"),
-                }
-              : undefined,
+          region: optionalEnv("AWS_REGION") ?? "us-east-2",
+          forcePathStyle: false,
         }),
+        kmsKeyId: requiredEnv("OOMOL_CONNECT_S3_KMS_KEY_ID"),
         bucket: requiredEnv("OOMOL_CONNECT_S3_BUCKET"),
         publicOrigin,
         ttlSeconds: transitFileTtlSeconds,

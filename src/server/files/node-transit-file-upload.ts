@@ -7,19 +7,22 @@ import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { requireTenant, tenantIdPattern } from "./tenant-context.ts";
 import { randomHex, TransitFileError } from "./transit-file-store.ts";
 
 export interface NodeTransitFileUploadOptions {
   transitFiles: IStagedTransitFileService;
   tempDir: string;
+  tenantScoped?: boolean;
 }
 
 export function createNodeTransitFileUpload(
   options: NodeTransitFileUploadOptions,
 ): (request: Request) => Promise<TransitFileUpload> {
   return async (request) => {
-    await mkdir(options.tempDir, { recursive: true });
-    const path = join(options.tempDir, `${randomHex(16)}.tmp`);
+    const tempDir = options.tenantScoped ? join(options.tempDir, requireTenant()) : options.tempDir;
+    await mkdir(tempDir, { recursive: true, mode: 0o700 });
+    const path = join(tempDir, `${randomHex(16)}.tmp`);
     try {
       return await options.transitFiles.createFromPath(
         await stageMultipartFile(request, path, options.transitFiles.maxBytes),
@@ -35,6 +38,10 @@ export async function cleanupStagedTransitFiles(tempDir: string, maxAgeMs: numbe
   const entries = await readdir(tempDir, { withFileTypes: true }).catch(() => []);
   await Promise.all(
     entries.map(async (entry) => {
+      if (entry.isDirectory() && tenantIdPattern.test(entry.name)) {
+        await cleanupStagedTransitFiles(join(tempDir, entry.name), maxAgeMs);
+        return;
+      }
       if (!entry.isFile() || !/^[a-f0-9]{32}\.tmp$/.test(entry.name)) {
         return;
       }
@@ -79,7 +86,7 @@ async function stageMultipartFile(request: Request, path: string, maxBytes: numb
       return;
     }
 
-    const writer = createWriteStream(path, { flags: "wx" });
+    const writer = createWriteStream(path, { flags: "wx", mode: 0o600 });
     staged = pipeline(stream, writer).then(() => {
       if (stream.truncated) {
         throw new TransitFileError(413, "file_too_large", `Transit file must be ${maxBytes} bytes or smaller.`);

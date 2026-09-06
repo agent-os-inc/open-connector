@@ -12,7 +12,10 @@ import { expiresAtFromLifetime, requestRefreshToken } from "./oauth-token.ts";
 type OAuthCredential = Extract<ResolvedCredential, { authType: "oauth2" }>;
 
 export interface IOAuthCredentialRefresher {
+  preflightRefresh?(service: string, credential: OAuthCredential): Promise<void>;
   refresh(service: string, credential: OAuthCredential): Promise<OAuthCredential>;
+  preflightRevoke?(service: string, credential: OAuthCredential): Promise<void>;
+  revoke?(service: string, credential: OAuthCredential): Promise<void>;
 }
 
 /**
@@ -27,6 +30,38 @@ export class OAuthCredentialRefreshService implements IOAuthCredentialRefresher 
     this.providerLoader = providerLoader;
   }
 
+  async preflightRefresh(service: string, credential: OAuthCredential): Promise<void> {
+    const auth = this.clientConfigs.getOAuthDefinition(service);
+    if (!credential.refreshToken) {
+      throw new ConnectionError("oauth_token_expired", `${service} OAuth refresh token is unavailable.`);
+    }
+    const config =
+      readOAuthClientConfigMetadata(service, credential.metadata) ?? (await this.clientConfigs.getConfig(service));
+    if (!config) {
+      throw new ConnectionError(
+        "oauth_client_config_required",
+        `Configure an OAuth client for ${service} before refreshing its token.`,
+      );
+    }
+    assertMatchingOAuthClient(service, credential, config.clientId, auth.connectionWriteMode === "create_only");
+  }
+
+  async preflightRevoke(service: string, credential: OAuthCredential): Promise<void> {
+    const auth = this.clientConfigs.getOAuthDefinition(service);
+    if (!auth.revocationUrl) {
+      throw new ConnectionError("oauth_revocation_unavailable", `${service} OAuth revocation is unavailable.`);
+    }
+    if (!credential.refreshToken && !credential.accessToken) {
+      throw new ConnectionError("oauth_revocation_unavailable", `${service} OAuth token is unavailable.`);
+    }
+    const config =
+      readOAuthClientConfigMetadata(service, credential.metadata) ?? (await this.clientConfigs.getConfig(service));
+    if (!config) {
+      throw new ConnectionError("oauth_client_config_required", `Configure an OAuth client for ${service} first.`);
+    }
+    assertMatchingOAuthClient(service, credential, config.clientId, auth.connectionWriteMode === "create_only");
+  }
+
   async refresh(service: string, credential: OAuthCredential): Promise<OAuthCredential> {
     const auth = this.clientConfigs.getOAuthDefinition(service);
     const config =
@@ -37,10 +72,14 @@ export class OAuthCredentialRefreshService implements IOAuthCredentialRefresher 
         `Configure an OAuth client for ${service} before refreshing its token.`,
       );
     }
+    assertMatchingOAuthClient(service, credential, config.clientId, auth.connectionWriteMode === "create_only");
 
     const refreshToken = credential.refreshToken ?? "";
     const createError = (message: string): ConnectionError =>
-      new ConnectionError("oauth_token_refresh_failed", message);
+      new ConnectionError(
+        "oauth_token_refresh_failed",
+        auth.redactTokenErrors ? "OAuth token refresh failed." : message,
+      );
     const providerOAuth = await this.providerLoader?.loadProviderOAuthRuntime?.(service);
     let refreshed: OAuthTokenResult;
     if (providerOAuth?.refreshAccessToken) {
@@ -87,6 +126,61 @@ export class OAuthCredentialRefreshService implements IOAuthCredentialRefresher 
         refreshedAt: new Date().toISOString(),
       },
     };
+  }
+
+  async revoke(service: string, credential: OAuthCredential): Promise<void> {
+    const auth = this.clientConfigs.getOAuthDefinition(service);
+    if (!auth.revocationUrl) {
+      throw new ConnectionError("oauth_revocation_unavailable", `${service} OAuth revocation is unavailable.`);
+    }
+    const config =
+      readOAuthClientConfigMetadata(service, credential.metadata) ?? (await this.clientConfigs.getConfig(service));
+    if (!config) {
+      throw new ConnectionError("oauth_client_config_required", `Configure an OAuth client for ${service} first.`);
+    }
+    assertMatchingOAuthClient(service, credential, config.clientId, auth.connectionWriteMode === "create_only");
+    const token = credential.refreshToken ?? credential.accessToken;
+    let response: Response;
+    try {
+      response = await providerFetch(this.clientConfigs.resolveEndpointUrl(service, auth.revocationUrl, config), {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          authorization: `Basic ${Buffer.from(`${encodeOAuthBasicCredential(config.clientId)}:${encodeOAuthBasicCredential(config.clientSecret)}`).toString("base64")}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ token }),
+        redirect: "manual",
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch {
+      throw new ConnectionError("oauth_revocation_quarantined", `${service} OAuth revocation outcome is unknown.`);
+    }
+    await response.body?.cancel().catch(() => undefined);
+    if (!response.ok) {
+      throw new ConnectionError("oauth_revocation_failed", `${service} OAuth revocation failed.`);
+    }
+  }
+}
+
+function encodeOAuthBasicCredential(value: string): string {
+  return new URLSearchParams({ value }).toString().slice("value=".length);
+}
+
+function assertMatchingOAuthClient(
+  service: string,
+  credential: OAuthCredential,
+  currentClientId: string,
+  required: boolean,
+): void {
+  if (
+    (required || credential.metadata.oauthClientId !== undefined) &&
+    credential.metadata.oauthClientId !== currentClientId
+  ) {
+    throw new ConnectionError(
+      "oauth_client_mismatch",
+      `${service} OAuth client identity changed; reconnect before token operations.`,
+    );
   }
 }
 

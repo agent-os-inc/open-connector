@@ -13,6 +13,7 @@ import {
 const oauthTokenResponseMaxBytes = 1024 * 1024;
 /** Longest `expires_in` we accept; anything larger overflows the ECMAScript `Date` range. */
 const maxExpiresInSeconds = 100 * 365 * 24 * 60 * 60;
+const definitiveTokenFailures = new WeakSet<object>();
 
 class OAuthTokenResponseSizeError extends Error {}
 
@@ -95,6 +96,11 @@ export async function requestRefreshToken(input: RefreshTokenRequest): Promise<O
 }
 
 async function requestToken(input: TokenRequest): Promise<OAuthTokenResult> {
+  const createDefinitiveError: OAuthTokenErrorFactory = (message) => {
+    const error = input.createError(message);
+    if (typeof error === "object" && error !== null) definitiveTokenFailures.add(error);
+    return error;
+  };
   const fields: Record<string, string> = { ...input.fields };
   const clientIdField = input.tokenRequestFields?.clientId;
   if (clientIdField !== false) {
@@ -157,7 +163,7 @@ async function requestToken(input: TokenRequest): Promise<OAuthTokenResult> {
     if (!response.ok || !isEnvelopeSuccess(rawPayload, input.responseEnvelope)) {
       const providerMessage = readTokenErrorMessage(rawPayload, payload, input.responseEnvelope);
       const bodyDescription = bytes.byteLength === 0 ? "empty body" : "unrecognized response body";
-      throw input.createError(
+      throw createDefinitiveError(
         providerMessage ??
           // Token endpoints and intermediaries can echo request credentials. Keep
           // arbitrary response bytes out of the public error while distinguishing
@@ -178,6 +184,11 @@ async function requestToken(input: TokenRequest): Promise<OAuthTokenResult> {
   } finally {
     timeout.cleanup();
   }
+}
+
+/** True only when the token endpoint definitively rejected the grant request. */
+export function isDefinitiveOAuthTokenFailure(error: unknown): boolean {
+  return typeof error === "object" && error !== null && definitiveTokenFailures.has(error);
 }
 
 /** Read a bounded token response and map body-stream failures to a safe OAuth error. */

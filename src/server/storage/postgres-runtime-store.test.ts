@@ -243,6 +243,20 @@ describe("PostgresRuntimeDatabase with PGlite", () => {
     await expect(database.oauthStateStore.take("current")).resolves.toMatchObject({ state: "current" });
   });
 
+  it("reserves aliases atomically and only deletes the current credential revision", async () => {
+    const results = await Promise.all([
+      database.connectionStore.create!("github", "reserved", githubCredential("first")),
+      database.connectionStore.create!("github", "reserved", githubCredential("second")),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const created = results.find((value) => value !== undefined)!;
+    const updated = await database.connectionStore.set("github", "reserved", githubCredential("replacement"));
+    await expect(database.connectionStore.deleteIfRevision!(created)).resolves.toBe(false);
+    await expect(database.connectionStore.get("github", "reserved")).resolves.toMatchObject(updated);
+    await expect(database.connectionStore.deleteIfRevision!(updated)).resolves.toBe(true);
+    await expect(database.connectionStore.get("github", "reserved")).resolves.toBeUndefined();
+  });
+
   it("preserves connection identity and rejects stale revisions", async () => {
     const created = await database.connectionStore.set("github", "default", githubCredential("github-token"));
     const updated = await database.connectionStore.set("github", "default", githubCredential("updated-token"));

@@ -16,6 +16,7 @@ const authCookieMaxAgeMs = authCookieMaxAgeSeconds * 1000;
  * Optional API authentication for HTTP, web console, and MCP callers.
  */
 export interface LocalAuthOptions {
+  tenantFiles?: boolean;
   adminToken?: string;
   runtimeToken?: string;
   hasRuntimeTokens?(): Promise<boolean>;
@@ -52,6 +53,11 @@ export function createLocalAuthMiddleware(options: LocalAuthOptions): Middleware
   }
 
   return async (context, next) => {
+    // Tenant middleware has already authenticated the dedicated service token.
+    if (options.tenantFiles && (context.req.path === "/api/files" || context.req.path.startsWith("/api/files/"))) {
+      await next();
+      return;
+    }
     const scope = readAuthScope(context.req.path);
     if (isPublicPath(context.req.path, context.req.method)) {
       await next();

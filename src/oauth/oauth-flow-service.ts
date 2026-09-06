@@ -1,4 +1,4 @@
-import type { ConnectionService } from "../connection-service.ts";
+import type { ConnectionService, OAuthConnectionReservation, StoredConnection } from "../connection-service.ts";
 import type { OAuth2AuthDefinition } from "../core/types.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { ISecretCodec } from "../server/secrets/secret-codec-core.ts";
@@ -11,7 +11,9 @@ import type { OAuthTokenResult } from "./oauth-token.ts";
 
 import { createHash, randomBytes } from "node:crypto";
 import { providerFetch } from "../providers/provider-runtime.ts";
-import { requestAuthorizationCodeToken } from "./oauth-token.ts";
+import { isDefinitiveOAuthTokenFailure, requestAuthorizationCodeToken } from "./oauth-token.ts";
+
+const gmailReadonlyScope = "https://www.googleapis.com/auth/gmail.readonly";
 
 /**
  * Started OAuth authorization flow returned to the local console.
@@ -31,7 +33,7 @@ export interface OAuthAuthorizationStartInput {
 export interface OAuthAuthorizationCompleteInput {
   state: string;
   code: string;
-  callbackParameters?: Record<string, string>;
+  callbackParameters?: Record<string, string | string[]>;
   signal?: AbortSignal;
 }
 
@@ -93,6 +95,7 @@ export class OAuthFlowService {
   async startAuthorization(input: OAuthAuthorizationStartInput): Promise<OAuthAuthorizationStart> {
     const { service, connectionName } = input;
     this.connections.assertProviderAvailable(service);
+    await this.connections.assertOAuthAliasAvailable(service, connectionName);
     const auth = this.clientConfigs.getOAuthDefinition(service);
     const config = input.clientConfig
       ? this.resolveCustomClientConfig(service, input.clientConfig)
@@ -105,15 +108,16 @@ export class OAuthFlowService {
     const state = crypto.randomUUID();
     const pkceCodeVerifier = auth.pkce ? createPkceCodeVerifier() : undefined;
     await this.states.deleteCreatedBefore(new Date(now.getTime() - this.stateMaxAgeMs).toISOString());
-    const authorizationScopes = resolveAuthorizationScopes(
+    const selectedScopes = resolveAuthorizationScopes(
       auth,
       input.authorizationOptionIds,
       this.clientConfigs.getEffectiveScopes(service, config),
     );
+    const authorizationScopes = resolveAgentOSAuthorizationScopes(service, selectedScopes);
     await this.states.set({
       service,
       connectionName,
-      state,
+      state: digestOAuthState(state),
       createdAt: now.toISOString(),
       pkceCodeVerifier,
       authorizationScopes: auth.authorizationOptions ? authorizationScopes : undefined,
@@ -151,7 +155,7 @@ export class OAuthFlowService {
   }
 
   async completeAuthorization(input: OAuthAuthorizationCompleteInput): Promise<{ service: string; connected: true }> {
-    const pending = await this.states.take(input.state);
+    const pending = await this.states.take(digestOAuthState(input.state));
     if (!pending) {
       throw new OAuthFlowError("invalid_oauth_state", "OAuth state is missing or expired.");
     }
@@ -160,6 +164,7 @@ export class OAuthFlowService {
     }
 
     const auth = this.clientConfigs.getOAuthDefinition(pending.service);
+    const providerSecret = readCallbackCredentialFields(auth.callbackCredentialFields, input.callbackParameters);
     const config = pending.clientConfig ?? (await this.clientConfigs.getConfig(pending.service));
     if (!config) {
       throw new OAuthFlowError(
@@ -168,37 +173,57 @@ export class OAuthFlowService {
       );
     }
 
+    let reservation =
+      auth.connectionWriteMode === "create_only"
+        ? await this.connections.reserveOAuthCredential(pending.service, pending.connectionName)
+        : undefined;
+    if (reservation) reservation = await this.connections.markOAuthReservationEgress(reservation);
     const redirectUri = this.clientConfigs.expectedRedirectUri(pending.service);
     const tokenUrl = this.clientConfigs.resolveEndpointUrl(pending.service, auth.tokenUrl, config);
-    const createError = (message: string): OAuthFlowError => new OAuthFlowError("oauth_token_exchange_failed", message);
+    const createError = (message: string): OAuthFlowError =>
+      new OAuthFlowError(
+        "oauth_token_exchange_failed",
+        auth.redactTokenErrors ? "OAuth token exchange failed." : message,
+      );
     const providerOAuth = await this.providerLoader.loadProviderOAuthRuntime?.(pending.service);
     let tokenResponse: OAuthTokenResult;
-    if (providerOAuth?.exchangeCode) {
-      tokenResponse = await providerOAuth.exchangeCode({
-        code: input.code,
-        clientConfig: config,
-        redirectUri,
-        tokenUrl,
-        fetcher: providerFetch,
-        signal: input.signal,
-        createError,
-      });
-    } else {
-      tokenResponse = await requestAuthorizationCodeToken({
-        code: input.code,
-        state: pending.state,
-        clientId: config.clientId,
-        clientSecret: config.clientSecret,
-        redirectUri,
-        responseEnvelope: auth.tokenResponseEnvelope,
-        tokenRequestFields: auth.tokenRequestFields,
-        tokenEndpointAuthMethod: auth.tokenEndpointAuthMethod,
-        tokenRequestFormat: auth.tokenRequestFormat,
-        tokenUrl,
-        extraFields: createTokenExtraFields(pending, auth.tokenRequestCallbackParameters, input.callbackParameters),
-        signal: input.signal,
-        createError,
-      });
+    try {
+      if (providerOAuth?.exchangeCode) {
+        tokenResponse = await providerOAuth.exchangeCode({
+          code: input.code,
+          clientConfig: config,
+          redirectUri,
+          tokenUrl,
+          fetcher: providerFetch,
+          signal: input.signal,
+          createError,
+        });
+      } else {
+        tokenResponse = await requestAuthorizationCodeToken({
+          code: input.code,
+          state: input.state,
+          clientId: config.clientId,
+          clientSecret: config.clientSecret,
+          redirectUri,
+          responseEnvelope: auth.tokenResponseEnvelope,
+          tokenRequestFields: auth.tokenRequestFields,
+          tokenEndpointAuthMethod: auth.tokenEndpointAuthMethod,
+          tokenRequestFormat: auth.tokenRequestFormat,
+          tokenUrl,
+          extraFields: createTokenExtraFields(pending, auth.tokenRequestCallbackParameters, input.callbackParameters),
+          signal: input.signal,
+          createError,
+        });
+      }
+    } catch (error) {
+      if (reservation) {
+        if (isDefinitiveOAuthTokenFailure(error)) {
+          await this.connections.discardReservedOAuthCredential(reservation.connection);
+        } else {
+          await this.connections.quarantineReservedOAuthCredential(reservation.connection);
+        }
+      }
+      throw error;
     }
     const refreshParameters = readCallbackParameters(auth.tokenRequestCallbackParameters, input.callbackParameters);
     const oauthCredential = {
@@ -210,7 +235,9 @@ export class OAuthFlowService {
         grantedScopes: pending.authorizationScopes ?? [],
       },
       providerSecret:
-        Object.keys(refreshParameters).length > 0 ? { oauthRefreshParameters: refreshParameters } : undefined,
+        Object.keys(refreshParameters).length > 0
+          ? { ...providerSecret, oauthRefreshParameters: refreshParameters }
+          : providerSecret,
       metadata: {
         ...tokenResponse.metadata,
         oauthClientId: config.clientId,
@@ -220,7 +247,29 @@ export class OAuthFlowService {
       },
     };
 
-    await this.connections.setOAuthCredential(pending.service, oauthCredential, pending.connectionName, input.signal);
+    if (reservation) {
+      await this.completeReservedAuthorization(pending.service, oauthCredential, reservation, auth.revocationMode);
+    } else {
+      try {
+        await this.connections.setOAuthCredential(
+          pending.service,
+          oauthCredential,
+          pending.connectionName,
+          input.signal,
+        );
+      } catch (error) {
+        if (auth.revocationMode !== "required") throw error;
+        try {
+          await this.connections.revokeUnstoredOAuthCredential(pending.service, oauthCredential);
+        } catch {
+          throw new OAuthFlowError(
+            "oauth_compensating_revocation_failed",
+            "OAuth connection could not be stored and its issued credential could not be safely revoked.",
+          );
+        }
+        throw error;
+      }
+    }
     return {
       service: pending.service,
       connected: true,
@@ -242,6 +291,111 @@ export class OAuthFlowService {
     }
     return this.clientConfigs.normalizeConfig(service, input);
   }
+
+  /** Consume a pending state when the provider returns an error or malformed callback. */
+  async discardAuthorization(state: string | undefined): Promise<void> {
+    if (state) await this.states.take(digestOAuthState(state));
+  }
+
+  private async completeReservedAuthorization(
+    service: string,
+    credential: Extract<import("../core/types.ts").ResolvedCredential, { authType: "oauth2" }>,
+    reservation: OAuthConnectionReservation,
+    revocationMode: "delete_only" | "required" | undefined,
+  ): Promise<void> {
+    let staged: StoredConnection;
+    try {
+      staged = await this.connections.stageReservedOAuthCredential(reservation, credential);
+    } catch (error) {
+      if (revocationMode !== "required") throw error;
+      try {
+        await this.connections.revokeUnstoredOAuthCredential(service, credential);
+        await this.connections.discardReservedOAuthCredential(reservation.connection);
+      } catch {
+        throw new OAuthFlowError(
+          "oauth_compensating_revocation_failed",
+          "OAuth connection could not be staged and its issued credential could not be safely revoked.",
+        );
+      }
+      throw error;
+    }
+    try {
+      await this.connections.activateReservedOAuthCredential(staged);
+    } catch (error) {
+      if (revocationMode !== "required") throw error;
+      try {
+        await this.connections.revokeUnstoredOAuthCredential(service, credential);
+        await this.connections.discardReservedOAuthCredential(staged);
+      } catch {
+        await this.connections.quarantineReservedOAuthCredential(staged);
+        throw new OAuthFlowError(
+          "oauth_compensating_revocation_failed",
+          "OAuth connection could not be stored and its issued credential could not be safely revoked.",
+        );
+      }
+      throw error;
+    }
+  }
+}
+
+function resolveAgentOSAuthorizationScopes(service: string, declaredScopes: string[]): string[] {
+  if (service !== "gmail") {
+    return declaredScopes;
+  }
+  if (!declaredScopes.includes(gmailReadonlyScope)) {
+    throw new OAuthFlowError(
+      "invalid_oauth_definition",
+      `Gmail OAuth must declare the required read-only scope ${gmailReadonlyScope}.`,
+    );
+  }
+  return [gmailReadonlyScope];
+}
+
+function readCallbackCredentialFields(
+  fields: OAuth2AuthDefinition["callbackCredentialFields"],
+  callbackParameters: Record<string, string | string[]> | undefined,
+): Record<string, string> | undefined {
+  if (!fields?.length) {
+    return undefined;
+  }
+
+  const result: Record<string, string> = {};
+  const seenKeys = new Set<string>();
+  for (const field of fields) {
+    if (!field.parameter || !field.key || seenKeys.has(field.key)) {
+      throw new OAuthFlowError("invalid_oauth_definition", "OAuth callback credential fields are invalid.");
+    }
+    seenKeys.add(field.key);
+
+    const raw = callbackParameters?.[field.parameter];
+    const values = typeof raw === "string" ? [raw] : (raw ?? []);
+    if (values.length > 1) {
+      throw new OAuthFlowError("invalid_oauth_callback", `OAuth callback parameter ${field.parameter} is ambiguous.`);
+    }
+    const value = values[0]?.trim();
+    if (!value) {
+      if (field.required) {
+        throw new OAuthFlowError("invalid_oauth_callback", `OAuth callback requires ${field.parameter}.`);
+      }
+      continue;
+    }
+    if (value.length > (field.maxLength ?? 255)) {
+      throw new OAuthFlowError("invalid_oauth_callback", `OAuth callback parameter ${field.parameter} is invalid.`);
+    }
+    if (field.pattern) {
+      let pattern: RegExp;
+      try {
+        pattern = new RegExp(field.pattern, "u");
+      } catch {
+        throw new OAuthFlowError("invalid_oauth_definition", "OAuth callback credential fields are invalid.");
+      }
+      if (!pattern.test(value)) {
+        throw new OAuthFlowError("invalid_oauth_callback", `OAuth callback parameter ${field.parameter} is invalid.`);
+      }
+    }
+    result[field.key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function setAuthorizationParam(
@@ -255,10 +409,14 @@ function setAuthorizationParam(
   }
 }
 
+function digestOAuthState(state: string): string {
+  return createHash("sha256").update(state, "utf8").digest("hex");
+}
+
 function createTokenExtraFields(
   state: OAuthAuthorizationState,
   parameterNames: readonly string[] | undefined,
-  callbackParameters: Record<string, string> | undefined,
+  callbackParameters: Record<string, string | string[]> | undefined,
 ): Record<string, string> | undefined {
   const fields = readCallbackParameters(parameterNames, callbackParameters);
   if (state.pkceCodeVerifier) fields.code_verifier = state.pkceCodeVerifier;
@@ -267,11 +425,14 @@ function createTokenExtraFields(
 
 function readCallbackParameters(
   parameterNames: readonly string[] | undefined,
-  values: Record<string, string> | undefined,
+  values: Record<string, string | string[]> | undefined,
 ): Record<string, string> {
   const fields: Record<string, string> = {};
   for (const name of parameterNames ?? []) {
-    const value = values?.[name];
+    const raw = values?.[name];
+    if (Array.isArray(raw) && raw.length > 1)
+      throw new OAuthFlowError("invalid_oauth_callback", "OAuth callback parameter is ambiguous.");
+    const value = Array.isArray(raw) ? raw[0] : raw;
     if (value) fields[name] = value;
   }
   return fields;

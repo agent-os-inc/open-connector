@@ -10,13 +10,15 @@ import {
   S3Client,
   S3ServiceException,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createReadStream } from "node:fs";
+import { requireTenant } from "./tenant-context.ts";
 import {
   assertFileSize,
   assertSafeFileId,
+  isSafeFileId,
   contentTypeFromFileId,
   normalizeDescriptor,
-  objectKey,
   randomHex,
   safeExtension,
   TransitFileError,
@@ -28,6 +30,7 @@ import {
 export interface S3TransitFileOptions {
   client: S3Client;
   bucket: string;
+  kmsKeyId: string;
   publicOrigin: string;
   ttlSeconds: number;
   maxBytes: number;
@@ -39,7 +42,7 @@ export interface S3TransitFileCredentials {
   sessionToken?: string;
 }
 
-/** S3 client settings as the Node server reads them from OOMOL_CONNECT_S3_*. */
+/** Explicit S3 client settings; the AgentOS server uses the default credential chain. */
 export interface S3TransitClientOptions {
   region: string;
   endpoint?: string;
@@ -49,8 +52,7 @@ export interface S3TransitClientOptions {
 
 /**
  * Build the S3 client for the transit-file backend. Checksum calculation stays opt-in so S3-compatible stores
- * without CRC support keep working. The server imports this module only when OOMOL_CONNECT_TRANSIT_FILE_BACKEND=s3,
- * so the AWS SDK stays out of the default startup graph.
+ * without CRC support keep working. The Node server imports this module eagerly.
  */
 export function createS3TransitClient(options: S3TransitClientOptions): S3Client {
   return new S3Client({
@@ -66,6 +68,7 @@ export function createS3TransitClient(options: S3TransitClientOptions): S3Client
 export class S3TransitFileService implements IStagedTransitFileService {
   private readonly client: S3Client;
   private readonly bucket: string;
+  private readonly kmsKeyId: string;
   private readonly publicOrigin: string;
   private readonly ttlMs: number;
   readonly maxBytes: number;
@@ -73,12 +76,15 @@ export class S3TransitFileService implements IStagedTransitFileService {
   constructor(options: S3TransitFileOptions) {
     this.client = options.client;
     this.bucket = options.bucket;
+    if (!options.kmsKeyId) throw new Error("Tenant S3 storage requires a KMS key.");
+    this.kmsKeyId = options.kmsKeyId;
     this.publicOrigin = options.publicOrigin;
     this.ttlMs = options.ttlSeconds * 1000;
     this.maxBytes = options.maxBytes;
   }
 
   async create(file: File): Promise<TransitFileUpload> {
+    requireTenant();
     assertFileSize(file.size, this.maxBytes);
     const fileId = `${randomHex(16)}${safeExtension(file.name)}`;
     const metadata = {
@@ -89,18 +95,31 @@ export class S3TransitFileService implements IStagedTransitFileService {
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
-        Key: objectKey(fileId),
+        Key: this.objectKey(fileId),
         Body: new Uint8Array(await file.arrayBuffer()),
+        ServerSideEncryption: "aws:kms",
+        SSEKMSKeyId: this.kmsKeyId,
+        Tagging: "agentos-transit=openconnector",
         ContentLength: file.size,
         ContentType: metadata.mimeType,
         Metadata: { filename: encodeFileName(metadata.name) },
       }),
     );
 
-    return uploadResult(this.publicOrigin, fileId, metadata);
+    return {
+      ...uploadResult(this.publicOrigin, fileId, metadata),
+      downloadUrl: await getSignedUrl(
+        this.client,
+        new GetObjectCommand({ Bucket: this.bucket, Key: this.objectKey(fileId) }),
+        {
+          expiresIn: Math.min(300, Math.floor(this.ttlMs / 1000)),
+        },
+      ),
+    };
   }
 
   async createFromPath(file: StagedTransitFile): Promise<TransitFileUpload> {
+    requireTenant();
     assertFileSize(file.sizeBytes, this.maxBytes);
     const fileId = `${randomHex(16)}${safeExtension(file.name)}`;
     const metadata = {
@@ -111,15 +130,27 @@ export class S3TransitFileService implements IStagedTransitFileService {
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
-        Key: objectKey(fileId),
+        Key: this.objectKey(fileId),
         Body: createReadStream(file.path),
+        ServerSideEncryption: "aws:kms",
+        SSEKMSKeyId: this.kmsKeyId,
+        Tagging: "agentos-transit=openconnector",
         ContentLength: file.sizeBytes,
         ContentType: metadata.mimeType,
         Metadata: { filename: encodeFileName(metadata.name) },
       }),
     );
 
-    return uploadResult(this.publicOrigin, fileId, metadata);
+    return {
+      ...uploadResult(this.publicOrigin, fileId, metadata),
+      downloadUrl: await getSignedUrl(
+        this.client,
+        new GetObjectCommand({ Bucket: this.bucket, Key: this.objectKey(fileId) }),
+        {
+          expiresIn: Math.min(300, Math.floor(this.ttlMs / 1000)),
+        },
+      ),
+    };
   }
 
   async read(fileId: string): Promise<TransitFileRead> {
@@ -135,18 +166,59 @@ export class S3TransitFileService implements IStagedTransitFileService {
   async delete(fileId: string): Promise<boolean> {
     assertSafeFileId(fileId);
     const existing = await this.objectExists(fileId);
-    await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: objectKey(fileId) }));
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: this.objectKey(fileId) }));
     return existing;
   }
 
+  // Physical expiry is owned by the tag-filtered S3 lifecycle rule; reads enforce TTL.
   async cleanupExpired(): Promise<void> {}
+
+  // Renew only our typed file descriptors, under the already authenticated
+  // tenant. Never replay provider execution merely because a URL expired.
+  async refreshDownloadUrls(value: unknown): Promise<unknown> {
+    requireTenant();
+    if (Array.isArray(value)) return Promise.all(value.map((item) => this.refreshDownloadUrls(item)));
+    if (!value || typeof value !== "object") return value;
+    const record = value as Record<string, unknown>;
+    const result = Object.fromEntries(
+      await Promise.all(Object.entries(record).map(async ([key, item]) => [key, await this.refreshDownloadUrls(item)])),
+    );
+    if (typeof record.fileId !== "string" || typeof record.downloadUrl !== "string") return result;
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(new URL(record.downloadUrl).pathname);
+    } catch {
+      return result;
+    }
+    if (!isSafeFileId(record.fileId) || pathname !== `/${this.objectKey(record.fileId)}`) return result;
+    const key = this.objectKey(record.fileId);
+    let object;
+    try {
+      object = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+    const remaining = object?.LastModified
+      ? Math.floor((this.ttlMs - (Date.now() - object.LastModified.getTime())) / 1000)
+      : 0;
+    if (remaining < 1) throw new TransitFileError(404, "file_not_found", "Transit file is no longer available.");
+    result.downloadUrl = await getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
+      expiresIn: Math.min(300, remaining),
+    });
+    return result;
+  }
+
+  private objectKey(fileId: string): string {
+    assertSafeFileId(fileId);
+    return `tenants/${requireTenant()}/transit/openconnector/${fileId}`;
+  }
 
   private async readObject(fileId: string): Promise<{
     object: GetObjectCommandOutput;
     metadata: TransitFileInfo;
   }> {
     assertSafeFileId(fileId);
-    const object = await this.getObject(objectKey(fileId));
+    const object = await this.getObject(this.objectKey(fileId));
     if (!object?.Body || !object.LastModified || this.isExpired(object.LastModified)) {
       await this.delete(fileId);
       throw new TransitFileError(404, "file_not_found", "Transit file was not found.");
@@ -177,7 +249,7 @@ export class S3TransitFileService implements IStagedTransitFileService {
 
   private async objectExists(fileId: string): Promise<boolean> {
     try {
-      await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: objectKey(fileId) }));
+      await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: this.objectKey(fileId) }));
       return true;
     } catch (error) {
       if (isNotFound(error)) {
