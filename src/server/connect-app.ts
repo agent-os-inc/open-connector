@@ -1,5 +1,6 @@
 import type { CatalogStore } from "../catalog-store.ts";
 import type { ActionPolicyService } from "../core/action-policy.ts";
+import type { TransitFileUpload } from "../core/types.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { RuntimeJwtVerifier } from "./api/runtime-jwt.ts";
 import type { ITransitFileService } from "./files/transit-file-store.ts";
@@ -21,6 +22,8 @@ export interface ConnectAppOptions {
   providerLoader: IProviderLoader;
   runtimeDatabase: RuntimeDatabase;
   transitFiles: ITransitFileService;
+  tenantFiles?: boolean;
+  uploadTransitFile?: (request: Request) => Promise<TransitFileUpload>;
   publicOrigin: string;
   secretCodec: ISecretCodec;
   adminToken?: string;
@@ -39,6 +42,9 @@ export interface ConnectApp {
 }
 
 export async function createConnectApp(options: ConnectAppOptions): Promise<ConnectApp> {
+  if (options.tenantFiles && (!options.adminToken || !options.secretCodec.encrypted)) {
+    throw new Error("Tenant files require admin authentication and encrypted runtime storage.");
+  }
   const runtimeTokens = new RuntimeTokenService(options.runtimeDatabase.runtimeTokenStore, options.logger);
   const hasStoredRuntimeTokens = async (): Promise<boolean> => (await runtimeTokens.listTokens()).length > 0;
   const oauthClientConfigs = new OAuthClientConfigService({
@@ -77,6 +83,8 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       actions,
       idempotency: options.runtimeDatabase.idempotencyStore,
       transitFiles: options.transitFiles,
+      tenantFiles: options.tenantFiles,
+      uploadTransitFile: options.uploadTransitFile,
       runtimeTokens,
       runtimePolicyStore: options.runtimeDatabase.runtimePolicyStore,
       registerStaticRoutes: options.registerStaticRoutes,
