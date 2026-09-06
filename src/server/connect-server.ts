@@ -53,7 +53,7 @@ import {
   writeRuntimeSuccess,
 } from "./api/runtime-api.ts";
 import { createTenantFileMiddleware, currentTenant } from "./files/tenant-context.ts";
-import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
+import { isTransitFilePath, transitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
 import { decodeRunLogCursor } from "./storage/runtime-store.ts";
 
@@ -112,10 +112,7 @@ export class ConnectServer {
 
     app.use("*", async (context, next) => {
       await next();
-      if (
-        this.options.tenantFiles &&
-        (context.req.path === "/api/files" || context.req.path.startsWith("/api/files/"))
-      ) {
+      if (this.options.tenantFiles && isTransitFilePath(context.req.path)) {
         context.header("Cache-Control", "private, no-store");
         return;
       }
@@ -287,7 +284,7 @@ export class ConnectServer {
       }
 
       const file = await this.options.transitFiles.read(fileId);
-      return createTransitFileResponse(file);
+      return transitFileResponse(file.file.stream(), file);
     } catch (error) {
       return this.handleTransitFileError(context, error);
     }

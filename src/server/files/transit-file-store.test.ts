@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentDispositionForFileName, createTransitFileResponse } from "./transit-file-store.ts";
+import { contentDispositionForFileName, transitFileResponse } from "./transit-file-store.ts";
 
 describe("contentDispositionForFileName", () => {
   it("leaves an ASCII file name in the plain filename parameter", () => {
@@ -29,10 +29,9 @@ describe("contentDispositionForFileName", () => {
   });
 });
 
-describe("createTransitFileResponse", () => {
+describe("transitFileResponse", () => {
   it("builds a response for a file whose name is outside Latin-1", async () => {
-    const response = createTransitFileResponse({
-      file: new File(["hello"], "发票.pdf", { type: "application/pdf" }),
+    const response = transitFileResponse("hello", {
       sizeBytes: 5,
       name: "发票.pdf",
       mimeType: "application/pdf",

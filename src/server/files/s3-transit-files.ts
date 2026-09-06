@@ -1,6 +1,6 @@
 import type { TransitFileRead, TransitFileUpload } from "../../core/types.ts";
 import type { IStagedTransitFileService, StagedTransitFile, TransitFileInfo } from "./transit-file-store.ts";
-import type { GetObjectCommandOutput } from "@aws-sdk/client-s3";
+import type { GetObjectCommandOutput, PutObjectCommandInput } from "@aws-sdk/client-s3";
 
 import {
   DeleteObjectCommand,
@@ -24,44 +24,29 @@ import {
   TransitFileError,
   transitFileRead,
   transitFileResponse,
-  uploadResult,
 } from "./transit-file-store.ts";
+
+/** A presigned download URL is a bearer capability, so it never outlives five minutes. */
+const maxSignedUrlSeconds = 300;
+const transitObjectTag = "agentos-transit=openconnector";
 
 export interface S3TransitFileOptions {
   client: S3Client;
   bucket: string;
   kmsKeyId: string;
-  publicOrigin: string;
   ttlSeconds: number;
   maxBytes: number;
 }
 
-export interface S3TransitFileCredentials {
-  accessKeyId: string;
-  secretAccessKey: string;
-  sessionToken?: string;
-}
-
-/** Explicit S3 client settings; the AgentOS server uses the default credential chain. */
-export interface S3TransitClientOptions {
-  region: string;
-  endpoint?: string;
-  forcePathStyle: boolean;
-  credentials?: S3TransitFileCredentials;
-}
-
 /**
  * Build the S3 client for the transit-file backend. Checksum calculation stays opt-in so S3-compatible stores
- * without CRC support keep working. The Node server imports this module eagerly.
+ * without CRC support keep working; credentials come from the SDK default chain (EKS Pod Identity).
  */
-export function createS3TransitClient(options: S3TransitClientOptions): S3Client {
+export function createS3TransitClient(region: string): S3Client {
   return new S3Client({
-    region: options.region,
-    endpoint: options.endpoint,
-    forcePathStyle: options.forcePathStyle,
+    region,
     requestChecksumCalculation: "WHEN_REQUIRED",
     responseChecksumValidation: "WHEN_REQUIRED",
-    credentials: options.credentials,
   });
 }
 
@@ -69,7 +54,6 @@ export class S3TransitFileService implements IStagedTransitFileService {
   private readonly client: S3Client;
   private readonly bucket: string;
   private readonly kmsKeyId: string;
-  private readonly publicOrigin: string;
   private readonly ttlMs: number;
   readonly maxBytes: number;
 
@@ -78,84 +62,23 @@ export class S3TransitFileService implements IStagedTransitFileService {
     this.bucket = options.bucket;
     if (!options.kmsKeyId) throw new Error("Tenant S3 storage requires a KMS key.");
     this.kmsKeyId = options.kmsKeyId;
-    this.publicOrigin = options.publicOrigin;
     this.ttlMs = options.ttlSeconds * 1000;
     this.maxBytes = options.maxBytes;
   }
 
-  async create(file: File): Promise<TransitFileUpload> {
-    requireTenant();
-    assertFileSize(file.size, this.maxBytes);
-    const fileId = `${randomHex(16)}${safeExtension(file.name)}`;
-    const metadata = {
-      ...normalizeDescriptor({ name: file.name || fileId, mimeType: file.type || contentTypeFromFileId(fileId) }),
-      sizeBytes: file.size,
-    };
-
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: this.objectKey(fileId),
-        Body: new Uint8Array(await file.arrayBuffer()),
-        ServerSideEncryption: "aws:kms",
-        SSEKMSKeyId: this.kmsKeyId,
-        Tagging: "agentos-transit=openconnector",
-        ContentLength: file.size,
-        ContentType: metadata.mimeType,
-        Metadata: { filename: encodeFileName(metadata.name) },
-      }),
-    );
-
-    return {
-      ...uploadResult(this.publicOrigin, fileId, metadata),
-      downloadUrl: await getSignedUrl(
-        this.client,
-        new GetObjectCommand({ Bucket: this.bucket, Key: this.objectKey(fileId) }),
-        {
-          expiresIn: Math.min(300, Math.floor(this.ttlMs / 1000)),
-        },
-      ),
-    };
+  create(file: File): Promise<TransitFileUpload> {
+    return this.put(file.size, file.name, file.type, async () => new Uint8Array(await file.arrayBuffer()));
   }
 
-  async createFromPath(file: StagedTransitFile): Promise<TransitFileUpload> {
-    requireTenant();
-    assertFileSize(file.sizeBytes, this.maxBytes);
-    const fileId = `${randomHex(16)}${safeExtension(file.name)}`;
-    const metadata = {
-      ...normalizeDescriptor({ name: file.name || fileId, mimeType: file.mimeType || contentTypeFromFileId(fileId) }),
-      sizeBytes: file.sizeBytes,
-    };
-
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: this.objectKey(fileId),
-        Body: createReadStream(file.path),
-        ServerSideEncryption: "aws:kms",
-        SSEKMSKeyId: this.kmsKeyId,
-        Tagging: "agentos-transit=openconnector",
-        ContentLength: file.sizeBytes,
-        ContentType: metadata.mimeType,
-        Metadata: { filename: encodeFileName(metadata.name) },
-      }),
-    );
-
-    return {
-      ...uploadResult(this.publicOrigin, fileId, metadata),
-      downloadUrl: await getSignedUrl(
-        this.client,
-        new GetObjectCommand({ Bucket: this.bucket, Key: this.objectKey(fileId) }),
-        {
-          expiresIn: Math.min(300, Math.floor(this.ttlMs / 1000)),
-        },
-      ),
-    };
+  createFromPath(file: StagedTransitFile): Promise<TransitFileUpload> {
+    return this.put(file.sizeBytes, file.name, file.mimeType, () => createReadStream(file.path));
   }
 
   async read(fileId: string): Promise<TransitFileRead> {
     const { object, metadata } = await this.readObject(fileId);
-    return transitFileRead(Uint8Array.from(await object.Body!.transformToByteArray()), metadata);
+    // The SDK's bytes are always ArrayBuffer-backed; asserting that beats copying the whole file.
+    const bytes = (await object.Body!.transformToByteArray()) as Uint8Array<ArrayBuffer>;
+    return transitFileRead(bytes, metadata);
   }
 
   async response(fileId: string): Promise<Response> {
@@ -180,21 +103,31 @@ export class S3TransitFileService implements IStagedTransitFileService {
     if (Array.isArray(value)) return Promise.all(value.map((item) => this.refreshDownloadUrls(item)));
     if (!value || typeof value !== "object") return value;
     const record = value as Record<string, unknown>;
-    const result = Object.fromEntries(
-      await Promise.all(Object.entries(record).map(async ([key, item]) => [key, await this.refreshDownloadUrls(item)])),
+    if (typeof record.fileId === "string" && typeof record.downloadUrl === "string") {
+      return this.renewDownloadUrl(record, record.fileId, record.downloadUrl);
+    }
+    const entries = await Promise.all(
+      Object.entries(record).map(async ([key, item]) => [key, await this.refreshDownloadUrls(item)] as const),
     );
-    if (typeof record.fileId !== "string" || typeof record.downloadUrl !== "string") return result;
+    return entries.some(([key, item]) => item !== record[key]) ? Object.fromEntries(entries) : value;
+  }
+
+  /** Re-sign a descriptor that names an object of this tenant, leaving anything else untouched. */
+  private async renewDownloadUrl(
+    descriptor: Record<string, unknown>,
+    fileId: string,
+    downloadUrl: string,
+  ): Promise<Record<string, unknown>> {
     let pathname: string;
     try {
-      pathname = decodeURIComponent(new URL(record.downloadUrl).pathname);
+      pathname = decodeURIComponent(new URL(downloadUrl).pathname);
     } catch {
-      return result;
+      return descriptor;
     }
-    if (!isSafeFileId(record.fileId) || pathname !== `/${this.objectKey(record.fileId)}`) return result;
-    const key = this.objectKey(record.fileId);
+    if (!isSafeFileId(fileId) || pathname !== `/${this.objectKey(fileId)}`) return descriptor;
     let object;
     try {
-      object = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      object = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: this.objectKey(fileId) }));
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
@@ -202,10 +135,51 @@ export class S3TransitFileService implements IStagedTransitFileService {
       ? Math.floor((this.ttlMs - (Date.now() - object.LastModified.getTime())) / 1000)
       : 0;
     if (remaining < 1) throw new TransitFileError(404, "file_not_found", "Transit file is no longer available.");
-    result.downloadUrl = await getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
-      expiresIn: Math.min(300, remaining),
+    return { ...descriptor, downloadUrl: await this.signedUrl(fileId, remaining) };
+  }
+
+  /** Store `body` under the current tenant's transit prefix and answer with a short-lived download URL. */
+  private async put(
+    sizeBytes: number,
+    uploadedName: string,
+    uploadedMimeType: string,
+    body: () => PutObjectCommandInput["Body"] | Promise<PutObjectCommandInput["Body"]>,
+  ): Promise<TransitFileUpload> {
+    requireTenant();
+    assertFileSize(sizeBytes, this.maxBytes);
+    const fileId = `${randomHex(16)}${safeExtension(uploadedName)}`;
+    const { name, mimeType } = normalizeDescriptor({
+      name: uploadedName || fileId,
+      mimeType: uploadedMimeType || contentTypeFromFileId(fileId),
     });
-    return result;
+
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: this.objectKey(fileId),
+        Body: await body(),
+        ServerSideEncryption: "aws:kms",
+        SSEKMSKeyId: this.kmsKeyId,
+        Tagging: transitObjectTag,
+        ContentLength: sizeBytes,
+        ContentType: mimeType,
+        Metadata: { filename: encodeFileName(name) },
+      }),
+    );
+
+    return {
+      fileId,
+      sizeBytes,
+      name,
+      mimeType,
+      downloadUrl: await this.signedUrl(fileId, Math.floor(this.ttlMs / 1000)),
+    };
+  }
+
+  private signedUrl(fileId: string, availableSeconds: number): Promise<string> {
+    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: this.objectKey(fileId) }), {
+      expiresIn: Math.min(maxSignedUrlSeconds, availableSeconds),
+    });
   }
 
   private objectKey(fileId: string): string {
@@ -277,8 +251,5 @@ function decodeFileName(value: string | undefined): string | undefined {
 }
 
 function isNotFound(error: unknown): boolean {
-  return (
-    error instanceof S3ServiceException &&
-    (error.$metadata.httpStatusCode === 404 || error.name === "NoSuchKey" || error.name === "NotFound")
-  );
+  return error instanceof S3ServiceException && error.$metadata.httpStatusCode === 404;
 }

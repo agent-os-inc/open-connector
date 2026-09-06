@@ -3,7 +3,7 @@ import type { MiddlewareHandler } from "hono";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { timingSafeEqual } from "node:crypto";
 import { jsonError } from "../api/http-utils.ts";
-import { TransitFileError } from "./transit-file-store.ts";
+import { isTransitFilePath, TransitFileError } from "./transit-file-store.ts";
 
 const tenants = new AsyncLocalStorage<string>();
 export const tenantIdPattern: RegExp = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -32,9 +32,8 @@ export function createTenantFileMiddleware(runtimeToken: string | undefined): Mi
     if (path === "/mcp" || path.startsWith("/mcp/") || path.startsWith("/v1/proxy/")) {
       return jsonError(context, 403, "agentos_required", "Use the authorized AgentOS action endpoint.");
     }
-    const isFile = path === "/api/files" || path.startsWith("/api/files/");
     const isAction = context.req.method === "POST" && path.startsWith("/v1/actions/");
-    if (!isFile && !isAction) {
+    if (!isTransitFilePath(path) && !isAction) {
       return next();
     }
     const supplied = Buffer.from(context.req.header("authorization") ?? "");
@@ -45,7 +44,7 @@ export function createTenantFileMiddleware(runtimeToken: string | undefined): Mi
     if (!tenantIdPattern.test(tenant)) {
       return jsonError(context, 400, "tenant_required", "A canonical tenant UUID is required.");
     }
+    // The server's cache middleware marks every transit file response private.
     await tenants.run(tenant, next);
-    context.header("Cache-Control", "private, no-store");
   };
 }

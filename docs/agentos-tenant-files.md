@@ -1,103 +1,88 @@
 # AgentOS tenant transit files
 
-This branch preserves OpenConnector v1.3.4 at
-`ef9ef5b6cf1f8c15368f0a62fc2517780aebc12a` plus the reviewed TEN-609
-QuickBooks/Gmail/Alchemy source tree
-`73bf9fedb4b46191a883ed8cd959c49bab0dd50d`. It backports the upstream S3
-and streaming multipart implementation from upstream commit
-`5a0db6f07a70d553b02c33a85238c8710d5680d2`, then enforces tenant ownership.
-It does not upgrade the runtime to upstream v1.5 or migrate SQLite.
+Pinned to OpenConnector v1.3.4 (`ef9ef5b6cf1f8c15368f0a62fc2517780aebc12a`)
+plus the reviewed TEN-609 source tree
+(`73bf9fedb4b46191a883ed8cd959c49bab0dd50d`), with the upstream S3 and
+streaming multipart implementation backported from
+`5a0db6f07a70d553b02c33a85238c8710d5680d2` and tenant ownership enforced on
+top. It does not upgrade to upstream v1.5 or migrate SQLite.
 
-## Contract
+## Configuration
 
-Set `OOMOL_CONNECT_TRANSIT_FILE_BACKEND=s3`, `OOMOL_CONNECT_S3_BUCKET`,
-`OOMOL_CONNECT_S3_KMS_KEY_ID`, and `AWS_REGION`. Existing runtime token,
-admin token and encryption key remain required. Credentials use the AWS SDK
-default chain with EKS Pod Identity; static AWS credential environment
-variables are rejected at startup. SQLite/PVC retains runtime records and
-native encrypted provider credentials. No per-user vault lookup is involved.
+`OOMOL_CONNECT_TRANSIT_FILE_BACKEND=s3`, `OOMOL_CONNECT_S3_BUCKET`,
+`OOMOL_CONNECT_S3_KMS_KEY_ID`, `AWS_REGION`. Runtime token, admin token and
+encryption key remain required. Credentials come from the AWS SDK default
+chain (EKS Pod Identity); static AWS credential env vars are rejected at
+startup. SQLite/PVC still holds runtime records and encrypted provider
+credentials.
 
-Go supplies `X-AgentOS-Tenant-ID` only after current tenant/user/profile,
-action and connected-account authorization. The private connector accepts
-that header only with its configured AgentOS service runtime bearer token.
-Admin tokens, stored runtime tokens and JWTs cannot establish this tenant
-context. Missing, repeated, noncanonical or traversal-shaped tenant IDs
-fail before execution or file access. Direct MCP/proxy execution is disabled
-in S3 mode; catalog and admin/OAuth routes retain their existing controls.
-OAuth callback routing must remain separate from public admin/runtime access.
+## Tenant authority
 
-Objects use `tenants/<canonical UUID>/transit/openconnector/<random file ID>`.
-Upload, provider-produced files, read/head/download and deletion use the same
-immutable async tenant context. There is no shared-prefix fallback. The
-shared Pod Identity role does not provide per-tenant IAM isolation: this is
-an application boundary enforced after Go authorization. Action idempotency
-is also scoped by tenant, preventing cached response crossover.
+Go supplies `X-AgentOS-Tenant-ID` only after tenant/user/profile, action and
+connected-account authorization. The connector accepts that header only with
+its configured AgentOS service runtime bearer token — admin tokens, stored
+runtime tokens and JWTs cannot establish tenant context. Missing, repeated,
+noncanonical or traversal-shaped IDs fail before execution or file access.
+Direct MCP/proxy execution is disabled in S3 mode.
 
-Every write explicitly requests the configured SSE-KMS key and the object
-tag `agentos-transit=openconnector`. The role needs GetObject, PutObject,
-PutObjectTagging and DeleteObject only under this transit subtree, plus the
-existing S3-scoped KMS permissions. Do not grant all tenant data. HEAD uses
-GetObject authority. No bucket listing is used by the runtime.
+Objects live at `tenants/<canonical UUID>/transit/openconnector/<file ID>`,
+with no shared-prefix fallback. Upload, provider-produced files,
+read/head/download and deletion share one immutable async tenant context, and
+action idempotency is keyed by tenant so cached responses cannot cross over.
+The shared Pod Identity role gives no per-tenant IAM isolation: this is an
+application boundary enforced after Go authorization.
+
+## S3 and KMS
+
+Every write requests the configured SSE-KMS key and the object tag
+`agentos-transit=openconnector`. The role needs GetObject, PutObject,
+PutObjectTagging and DeleteObject under this transit subtree only, plus the
+existing S3-scoped KMS permissions — not all tenant data. HEAD uses GetObject
+authority; the runtime never lists the bucket.
 
 Provider download URLs are S3 GET signatures valid for at most five minutes
-and at most the remaining object TTL. They are bearer capabilities: any
-recipient can fetch that object until expiry, deletion or credential expiry.
-They expose no connector service token and require no public connector
-runtime route. Authorized idempotent replay renews only matching file URLs,
-without provider re-execution or extension of object lifetime. Deleted or
-expired transit files fail visibly. SDK credential expiry may shorten URLs.
+and never beyond the object's remaining TTL. They are bearer capabilities: any
+holder can fetch that object until expiry or deletion. Authorized idempotent
+replay re-signs matching file URLs without re-running the provider or
+extending object lifetime.
 
 ## Temporary data and cleanup
 
-The default object TTL is 86400 seconds (`OOMOL_CONNECT_TRANSIT_FILE_TTL_SECONDS`).
-Expired objects cannot be read or renewed through the connector. S3 lifecycle
-must physically remove objects using BOTH prefix `tenants/` and tag
-`agentos-transit=openconnector`; S3 lifecycle prefix filters do not accept
-wildcards. Use a one-day expiry for the default TTL, noting lifecycle removal
-is asynchronous rather than an exact 24-hour deletion guarantee. Changing
-runtime TTL requires a matching lifecycle review. Never apply this rule to
-other tenant objects.
+Default object TTL is 86400s (`OOMOL_CONNECT_TRANSIT_FILE_TTL_SECONDS`);
+expired objects cannot be read or re-signed. Physical removal is the S3
+lifecycle rule's job and it must filter on BOTH prefix `tenants/` and tag
+`agentos-transit=openconnector` (lifecycle prefixes accept no wildcards). Use
+a one-day expiry for the default TTL — removal is asynchronous, not an exact
+24-hour guarantee — and re-review the rule whenever the runtime TTL changes.
+Never apply it to other tenant objects.
 
-Multipart uploads stage at `<dataDir>/tmp/transit-files/<tenant UUID>/<random>.tmp`,
-with private directory/file modes, and remove staging on success or error.
-Startup cleanup removes expired managed staging files across tenant directories;
-symlinks and unrelated names are not followed. Provider-produced File objects
-may be buffered in memory. This is S3 final storage, not a promise of zero
-local files. SQLite and provider credentials remain on the existing PVC.
+Multipart uploads stage at
+`<dataDir>/tmp/transit-files/<tenant UUID>/<random>.tmp` with private
+directory/file modes, removed on success or error; startup cleanup sweeps
+expired managed staging files per tenant directory without following symlinks
+or unrelated names. Provider-produced File objects may still be buffered in
+memory: S3 is the final store, not a promise of zero local bytes.
 
-## Image and deployment ownership
+## Image and rollout
 
 Build `docker/Dockerfile.agentos` from an exact reviewed fork commit with
-`VCS_REF` set to that commit. The infrastructure owner retains the existing
-protected linux/arm64 image build/sign/attestation workflow and
-`ghcr.io/agent-os-inc/openconnector-evaluation` registry. Publish and pin the
-resulting immutable digest; a source revision or local test is not a published
-image. Retain the current Node image digest, non-root UID 10001, production
-dependency audit, license notices and existing supply-chain checks.
+`VCS_REF` set to it, through the existing protected linux/arm64
+build/sign/attestation workflow into
+`ghcr.io/agent-os-inc/openconnector-evaluation`, then pin the resulting
+immutable digest — a source revision is not a published image. Keep the
+pinned Node image digest, non-root UID 10001, dependency audit, license
+notices, single replica and SQLite/PVC.
 
-Infra owns custom chart templates/values, source pins, S3/KMS permissions,
-lifecycle and the exact Pod Identity agent egress exception required for
-credential delivery. General private or metadata access remains blocked;
-public Internet egress stays unrestricted per deployment policy. LOCAL owns
-live cluster/credential acceptance. Keep single replica, SQLite/PVC, startup
-CSI mounts and current provider action/OAuth restrictions.
-
-Roll out the Go tenant header first, then the compatible fork image and S3
-configuration. Fresh setup requires no SQLite transfer. Rollback must hold
-file-dependent invocations if the prior binary cannot enforce tenant file
-ownership; never restore shared transit reads as a fallback. Existing provider
-credentials and the PVC must be preserved.
+Roll out the Go tenant header first, then the fork image and S3 configuration.
+Rollback must hold file-dependent invocations if the prior binary cannot
+enforce tenant file ownership; never restore shared transit reads as a
+fallback.
 
 ## Acceptance
 
-Run `npm run fix-check`, the full `npm test`, `npm run generate:catalog`, and
-the hardened image build. Focused tests cover concurrent tenants, missing or
-spoofed authority, traversal, cross-tenant read/delete, SSE-KMS/tag writes,
-TTL, replay renewal, streamed staging cleanup, plus QBO/Gmail regressions.
-Go tests cover current authorization before dispatch and tenant header custody.
-
-Live acceptance remains separate: exact image digest/source/signature;
-private ingress and OAuth callback; fresh Pod Identity credentials; two-tenant
-upload/action/read/delete; KMS encryption and lifecycle tags; provider-facing
-signed download; staging cleanup; SQLite restart and native credential survival.
-No production rollout or provider credential rotation is implied.
+`npm run fix-check`, full `npm test`, `npm run generate:catalog`, and the
+hardened image build. Live acceptance is separate: image digest/signature,
+private ingress and OAuth callback, fresh Pod Identity credentials, two-tenant
+upload/action/read/delete, KMS encryption and lifecycle tags, provider-facing
+signed download, staging cleanup, SQLite restart with native credentials
+surviving.

@@ -1,8 +1,14 @@
 import type { R2BucketBinding, R2ObjectBinding } from "../cloudflare/cloudflare-bindings.ts";
 import type { ITransitFileService, TransitFileRead, TransitFileUpload } from "./transit-file-store.ts";
 
-import { extname } from "node:path";
-import { contentDispositionForFileName, contentTypeFromFileId, TransitFileError } from "./transit-file-store.ts";
+import {
+  assertSafeFileId,
+  contentDispositionForFileName,
+  contentTypeFromFileId,
+  randomHex,
+  safeExtension,
+  TransitFileError,
+} from "./transit-file-store.ts";
 
 export interface R2TransitFileOptions {
   bucket: R2BucketBinding;
@@ -143,20 +149,4 @@ function objectKey(fileId: string): string {
 
 function metadataKey(fileId: string): string {
   return `transit/${fileId}.meta.json`;
-}
-
-function assertSafeFileId(fileId: string): void {
-  if (!/^[a-f0-9]{32}(?:\.[a-z0-9]{1,16})?$/.test(fileId)) {
-    throw new TransitFileError(404, "file_not_found", "Transit file was not found.");
-  }
-}
-
-function safeExtension(name: string): string {
-  const extension = extname(name).toLowerCase();
-  return /^\.[a-z0-9]{1,16}$/.test(extension) ? extension : "";
-}
-
-function randomHex(byteLength: number): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

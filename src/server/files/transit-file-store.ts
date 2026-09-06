@@ -60,7 +60,7 @@ export function transitFileResponse(body: BodyInit, info: TransitFileInfo): Resp
 }
 
 /** Materialize a transit file's bytes as the `File` the executor-facing read contract returns. */
-export function transitFileRead(bytes: ArrayBuffer | Uint8Array<ArrayBuffer>, info: TransitFileInfo): TransitFileRead {
+export function transitFileRead(bytes: BufferSource, info: TransitFileInfo): TransitFileRead {
   return {
     file: new File([bytes], info.name, { type: info.mimeType }),
     sizeBytes: info.sizeBytes,
@@ -69,15 +69,9 @@ export function transitFileRead(bytes: ArrayBuffer | Uint8Array<ArrayBuffer>, in
   };
 }
 
-/** Describe a stored transit file to its uploader, with a download URL rooted at `publicOrigin`. */
-export function uploadResult(publicOrigin: string, fileId: string, info: TransitFileInfo): TransitFileUpload {
-  return {
-    fileId,
-    downloadUrl: `${publicOrigin.replace(/\/+$/, "")}/api/files/${encodeURIComponent(fileId)}`,
-    sizeBytes: info.sizeBytes,
-    name: info.name,
-    mimeType: info.mimeType,
-  };
+/** The transit file routes, which carry per-tenant bytes and are never cached or authenticated in-band. */
+export function isTransitFilePath(path: string): boolean {
+  return path === "/api/files" || path.startsWith("/api/files/");
 }
 
 /**
@@ -181,25 +175,13 @@ export function randomHex(byteLength: number): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** Trim a stored name and MIME type, substituting the matching fallback for a missing or blank value. */
-export function normalizeDescriptor(
-  input: Partial<TransitFileDescriptor>,
-  fallback: TransitFileDescriptor = { name: "file", mimeType: "application/octet-stream" },
-): TransitFileDescriptor {
+/** Trim a stored name and MIME type, substituting the generic fallback for a missing or blank value. */
+export function normalizeDescriptor(input: Partial<TransitFileDescriptor>): TransitFileDescriptor {
   return {
-    name: typeof input.name === "string" && input.name.trim() ? input.name.trim() : fallback.name,
-    mimeType: typeof input.mimeType === "string" && input.mimeType.trim() ? input.mimeType.trim() : fallback.mimeType,
+    name: typeof input.name === "string" && input.name.trim() ? input.name.trim() : "file",
+    mimeType:
+      typeof input.mimeType === "string" && input.mimeType.trim() ? input.mimeType.trim() : "application/octet-stream",
   };
 }
 
 export type { TransitFileRead, TransitFileUpload } from "../../core/types.ts";
-
-export function createTransitFileResponse(file: TransitFileRead): Response {
-  return new Response(file.file.stream(), {
-    headers: {
-      "content-length": String(file.sizeBytes),
-      "content-type": file.mimeType,
-      "content-disposition": contentDispositionForFileName(file.name),
-    },
-  });
-}

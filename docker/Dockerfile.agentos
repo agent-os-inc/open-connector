@@ -9,6 +9,8 @@ COPY scripts ./scripts
 COPY examples ./examples
 COPY migrations ./migrations
 RUN npm ci --ignore-scripts
+# ci.yml runs the suite only on pull_request and push to main, and no in-repo workflow builds this
+# Dockerfile, so this is the only gate binding a signed image to a passing tenant-isolation suite.
 RUN npm run generate:registry && npm test
 RUN npm run generate:catalog && npm run build && npm run build --workspace web
 

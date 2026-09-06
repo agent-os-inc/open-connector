@@ -3,6 +3,7 @@ import type { RuntimeJwtVerifier } from "./runtime-jwt.ts";
 import type { Context, MiddlewareHandler } from "hono";
 
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { isTransitFilePath } from "../files/transit-file-store.ts";
 import { isConsoleShellRequest } from "./console-paths.ts";
 import { jsonError } from "./http-utils.ts";
 
@@ -54,7 +55,7 @@ export function createLocalAuthMiddleware(options: LocalAuthOptions): Middleware
 
   return async (context, next) => {
     // Tenant middleware has already authenticated the dedicated service token.
-    if (options.tenantFiles && (context.req.path === "/api/files" || context.req.path.startsWith("/api/files/"))) {
+    if (options.tenantFiles && isTransitFilePath(context.req.path)) {
       await next();
       return;
     }

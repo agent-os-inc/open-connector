@@ -150,36 +150,14 @@ describe("S3TransitFileService", () => {
 });
 
 describe("createS3TransitClient", () => {
-  it("configures the client from the server settings and keeps checksums opt-in", async () => {
-    const client = createS3TransitClient({
-      region: "eu-west-1",
-      endpoint: "http://127.0.0.1:9000",
-      forcePathStyle: true,
-      credentials: { accessKeyId: "id", secretAccessKey: "secret", sessionToken: "token" },
-    });
+  it("keeps checksums opt-in and leaves the endpoint and credentials to the SDK defaults", async () => {
+    const client = createS3TransitClient("eu-west-1");
 
     try {
       await expect(client.config.region()).resolves.toBe("eu-west-1");
-      expect(client.config.forcePathStyle).toBe(true);
-      await expect(client.config.endpoint?.()).resolves.toMatchObject({ hostname: "127.0.0.1", port: 9000 });
-      await expect(client.config.credentials()).resolves.toMatchObject({
-        accessKeyId: "id",
-        secretAccessKey: "secret",
-        sessionToken: "token",
-      });
+      expect(client.config.endpoint).toBeUndefined();
       await expect(client.config.requestChecksumCalculation()).resolves.toBe("WHEN_REQUIRED");
       await expect(client.config.responseChecksumValidation()).resolves.toBe("WHEN_REQUIRED");
-    } finally {
-      client.destroy();
-    }
-  });
-
-  it("leaves endpoint and credentials to the SDK defaults when they are not configured", () => {
-    const client = createS3TransitClient({ region: "us-east-1", forcePathStyle: false });
-
-    try {
-      expect(client.config.endpoint).toBeUndefined();
-      expect(client.config.forcePathStyle).toBe(false);
     } finally {
       client.destroy();
     }
@@ -194,7 +172,6 @@ function createService(
     client,
     bucket: "transit-files",
     kmsKeyId: "arn:aws:kms:us-east-1:111111111111:key/test",
-    publicOrigin: "http://localhost:3000",
     ttlSeconds: options.ttlSeconds ?? 60,
     maxBytes: options.maxBytes ?? 1024 * 1024,
   });

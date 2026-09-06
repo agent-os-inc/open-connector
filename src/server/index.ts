@@ -69,10 +69,9 @@ if (
 }
 const transitFiles = tenantFiles
   ? new S3TransitFileService({
-      client: createS3TransitClient({ region: process.env.AWS_REGION ?? "us-east-2", forcePathStyle: false }),
+      client: createS3TransitClient(process.env.AWS_REGION ?? "us-east-2"),
       bucket: requiredEnv("OOMOL_CONNECT_S3_BUCKET"),
       kmsKeyId: requiredEnv("OOMOL_CONNECT_S3_KMS_KEY_ID"),
-      publicOrigin,
       ttlSeconds: transitFileTtlSeconds,
       maxBytes: transitFileMaxBytes,
     })
