@@ -2670,7 +2670,7 @@ describe("ConnectServer", () => {
 
     const providers = await app.request("/v1/providers");
     expect(providers.status).toBe(200);
-    expect(providers.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+    expect(providers.headers.get("cache-control")).toBe("no-store");
     await expect(providers.json()).resolves.toMatchObject({
       success: true,
       data: [
@@ -2685,7 +2685,7 @@ describe("ConnectServer", () => {
 
     const actionServices = await app.request("/v1/actions");
     expect(actionServices.status).toBe(200);
-    expect(actionServices.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+    expect(actionServices.headers.get("cache-control")).toBe("no-store");
     await expect(actionServices.json()).resolves.toMatchObject({
       success: true,
       data: [{ service: "example" }],
@@ -2693,7 +2693,7 @@ describe("ConnectServer", () => {
 
     const actions = await app.request("/v1/actions?service=example");
     expect(actions.status).toBe(200);
-    expect(actions.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+    expect(actions.headers.get("cache-control")).toBe("no-store");
     await expect(actions.json()).resolves.toMatchObject({
       success: true,
       data: [
@@ -2758,7 +2758,7 @@ describe("ConnectServer", () => {
 
     const action = await app.request("/v1/actions/example.echo");
     expect(action.status).toBe(200);
-    expect(action.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+    expect(action.headers.get("cache-control")).toBe("no-store");
     await expect(action.json()).resolves.toMatchObject({
       success: true,
       meta: {},
@@ -2875,6 +2875,64 @@ describe("ConnectServer", () => {
       success: true,
       data: ["example"],
     });
+  });
+
+  it("pins discovery and action execution while preserving idempotent replay", async () => {
+    let executions = 0;
+    const providerLoader = new ActionProviderLoader(async (input) => {
+      executions++;
+      return { ok: true, output: input };
+    });
+    const app = createTestServer([{ ...apiKeyProvider, actions: [echoAction] }], { providerLoader }).createApp();
+    const providers = await app.request("/v1/providers");
+    const generation = providers.headers.get("X-OpenConnector-Catalog-Generation")!;
+    expect(generation).toMatch(/^oc-v1-sha256:[a-f0-9]{64}$/);
+    const detail = await app.request("/v1/actions/example.echo", {
+      headers: { "X-OpenConnector-Expected-Generation": generation },
+    });
+    expect(detail.headers.get("X-OpenConnector-Catalog-Generation")).toBe(generation);
+    const digest = detail.headers.get("X-OpenConnector-Action-Digest")!;
+    expect(digest).toMatch(/^oc-v1-sha256:[a-f0-9]{64}$/);
+    expect(
+      (await app.request("/v1/actions", { headers: { "X-OpenConnector-Expected-Generation": "old" } })).status,
+    ).toBe(409);
+    await app.request("/api/connections/example", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ authType: "api_key", values: { apiKey: "fixture" } }),
+    });
+    const invoke = (expected: string | undefined) =>
+      app.request("/v1/actions/example.echo", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "digest-test",
+          ...(expected === undefined ? {} : { "X-OpenConnector-Expected-Action-Digest": expected }),
+        },
+        body: JSON.stringify({ input: { message: "hello" } }),
+      });
+    expect((await invoke("old")).status).toBe(409);
+    expect(executions).toBe(0);
+    expect((await invoke(digest)).status).toBe(200);
+    expect((await invoke(digest)).status).toBe(200);
+    expect(executions).toBe(1);
+    expect((await invoke(undefined)).status).toBe(409);
+    expect(executions).toBe(1);
+    const changed = createTestServer([
+      { ...apiKeyProvider, actions: [{ ...echoAction, description: "changed" }] },
+    ]).createApp();
+    expect((await changed.request("/v1/providers")).headers.get("X-OpenConnector-Catalog-Generation")).not.toBe(
+      generation,
+    );
+    expect(
+      (
+        await changed.request("/v1/actions/example.echo", {
+          method: "POST",
+          headers: { "content-type": "application/json", "X-OpenConnector-Expected-Action-Digest": digest },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(409);
   });
 
   it("replays completed idempotent action requests while preserving no-key behavior", async () => {

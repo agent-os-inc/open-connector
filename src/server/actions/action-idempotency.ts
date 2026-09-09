@@ -28,6 +28,7 @@ export interface ActionRequestFingerprintInput {
   connectionName: string;
   input: unknown;
   runtimeTokenId?: string;
+  expectedActionDigest?: string;
 }
 
 /**
@@ -66,6 +67,7 @@ export function hashActionRequest(input: ActionRequestFingerprintInput): string 
       connectionName: input.connectionName,
       input: canonicalize(input.input, 1),
       runtimeTokenId: input.runtimeTokenId,
+      expectedActionDigest: input.expectedActionDigest,
     }),
   );
 }
@@ -81,7 +83,8 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
 }
 
-function canonicalize(value: unknown, depth: number): unknown {
+/** Stable object-key ordering shared by request and catalog fingerprints. */
+export function canonicalize(value: unknown, depth: number = 1): unknown {
   if (Array.isArray(value)) {
     assertDepth(depth);
     return value.map((entry) => canonicalize(entry, depth + 1));

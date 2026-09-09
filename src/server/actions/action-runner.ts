@@ -9,6 +9,7 @@ import type { IRunLogStore, RunLog, RunLogCaller, RunLogListInput, RunLogPage } 
 
 import { ConnectionError } from "../../connection-service.ts";
 import { executeAction as executeProviderAction } from "../../core/execution.ts";
+import { actionDigest, CatalogChangedError } from "../api/catalog-version.ts";
 import { safeRunLogError, summarizeForRunLog } from "./run-log-summary.ts";
 
 export interface ActionRunnerOptions {
@@ -28,6 +29,7 @@ export interface RunActionInput {
   connectionName?: string;
   policy: ActionPolicySnapshot;
   runtimeTokenId?: string;
+  expectedActionDigest?: string;
   signal?: AbortSignal;
 }
 
@@ -62,6 +64,9 @@ export class ActionRunner {
       return undefined;
     }
 
+    if (input.expectedActionDigest !== undefined && input.expectedActionDigest !== actionDigest(action)) {
+      throw new CatalogChangedError();
+    }
     const executionId = crypto.randomUUID();
     const logContext = {
       actionId: action.id,
