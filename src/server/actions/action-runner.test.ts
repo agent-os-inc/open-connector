@@ -48,6 +48,23 @@ afterEach(() => {
 });
 
 describe("ActionRunner", () => {
+  it("rejects changed metadata at execution selection before credentials or side effects", async () => {
+    const runs = new MemoryRunLogStore();
+    const { logger } = createTestLogger();
+    const execute = vi.fn(async () => ({ ok: true, output: {} }));
+    const runner = createRunner({ runs, logger, providerLoader: new TestProviderLoader(execute) });
+    await expect(
+      runner.run({
+        actionId: "example.echo",
+        input: {},
+        caller: "http",
+        policy: openPolicy,
+        expectedActionDigest: "old",
+      }),
+    ).rejects.toThrow("Action metadata changed");
+    expect(execute).not.toHaveBeenCalled();
+    expect(runs.items).toEqual([]);
+  });
   it("uses one execution id across logs, storage, and the result", async () => {
     const runs = new MemoryRunLogStore();
     const { entries, logger } = createTestLogger();

@@ -37,6 +37,7 @@ import { ActionRunner } from "./actions/action-runner.ts";
 import { renderActionMarkdown } from "./api/action-markdown.ts";
 import { clearLocalAuthCookie, createLocalAuthMiddleware, readLocalAuthSession, readRuntimeGrant } from "./api/auth.ts";
 import { getResponseCachePolicy } from "./api/cache-policy.ts";
+import { actionDigest, catalogGeneration, CatalogChangedError } from "./api/catalog-version.ts";
 import { HttpRequestError, internalError, jsonError, notFound, readJsonBody } from "./api/http-utils.ts";
 import { renderOAuthCompletionPage } from "./api/oauth-completion-page.ts";
 import { createOpenApiDocument } from "./api/openapi.ts";
@@ -138,10 +139,13 @@ export class ConnectServer {
   private readonly actionSearch: ActionSearchIndexProvider;
   private readonly actionPolicy: ActionPolicyService;
   private readonly proxyRunner: ProxyRunner;
+  private readonly catalogRevision: string;
   private readonly policySnapshots = new WeakMap<Request, Promise<ActionPolicySnapshot>>();
 
   constructor(options: IConnectServerOptions) {
     this.options = options;
+    // Compute before readiness, never hydrate all lazy schemas on the first directory request.
+    this.catalogRevision = catalogGeneration(options.catalog);
     this.actionSearch = options.actionSearch ?? createActionSearchIndexProvider(options.catalog.actions);
     this.actionPolicy = options.actionPolicy ?? new ActionPolicyService();
     this.proxyRunner = new ProxyRunner({
@@ -201,6 +205,24 @@ export class ConnectServer {
       );
     }
     app.get("/v1/health", (context) => writeRuntimeSuccess(context, { ok: true, runtime: "oomol-connect" }));
+    app.use("/v1/*", async (context, next) => {
+      const path = context.req.path;
+      if (
+        context.req.method === "GET" &&
+        (path === "/v1/providers" || path === "/v1/actions" || path.startsWith("/v1/actions/"))
+      ) {
+        context.header("X-OpenConnector-Catalog-Generation", this.catalogRevision);
+        const expected = context.req.header("X-OpenConnector-Expected-Generation");
+        if (expected !== undefined && expected !== this.catalogRevision) {
+          return writeRuntimeFailure(context, {
+            status: 409,
+            errorCode: "catalog_generation_changed",
+            message: "Catalog generation changed; restart discovery.",
+          });
+        }
+      }
+      await next();
+    });
     app.get("/v1/providers", (context) => this.listRuntimeProviders(context));
     app.get("/v1/actions", (context) => this.listRuntimeActions(context));
     app.get("/v1/actions/search", (context) => this.searchRuntimeActions(context));
@@ -536,6 +558,7 @@ export class ConnectServer {
       return writeRuntimeFailure(context, unknownActionFailure(actionId));
     }
 
+    context.header("X-OpenConnector-Action-Digest", actionDigest(action));
     return writeRuntimeSuccess(context, serializeRuntimeAction(action));
   }
 
@@ -545,6 +568,14 @@ export class ConnectServer {
       return writeRuntimeFailure(context, unknownActionFailure(actionId));
     }
 
+    const expectedActionDigest = context.req.header("X-OpenConnector-Expected-Action-Digest");
+    if (expectedActionDigest !== undefined && expectedActionDigest !== actionDigest(action)) {
+      return writeRuntimeFailure(context, {
+        status: 409,
+        errorCode: "action_digest_changed",
+        message: "Action metadata changed; review it before execution.",
+      });
+    }
     const body = await readJsonBody(context);
     const input = body.input ?? {};
     const connectionName = readConnectionName(context, body);
@@ -563,7 +594,15 @@ export class ConnectServer {
     if (!policy.evaluate(action).allowed) {
       return writeRuntimeActionHttpResult(
         context,
-        await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant, context.req.raw.signal),
+        await this.executeRuntimeAction(
+          actionId,
+          input,
+          connectionName,
+          policy,
+          runtimeGrant,
+          context.req.raw.signal,
+          expectedActionDigest,
+        ),
       );
     }
     const idempotencyKey = readIdempotencyKey(context.req.header("idempotency-key"));
@@ -579,7 +618,15 @@ export class ConnectServer {
     if (!idempotencyKey.key) {
       return writeRuntimeActionHttpResult(
         context,
-        await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant, context.req.raw.signal),
+        await this.executeRuntimeAction(
+          actionId,
+          input,
+          connectionName,
+          policy,
+          runtimeGrant,
+          context.req.raw.signal,
+          expectedActionDigest,
+        ),
       );
     }
 
@@ -593,6 +640,7 @@ export class ConnectServer {
         connectionName: connectionName ?? defaultConnectionName,
         input,
         runtimeTokenId: runtimeGrant?.tokenId,
+        expectedActionDigest,
       });
     } catch (error) {
       if (!(error instanceof ActionInputDepthError)) {
@@ -650,6 +698,7 @@ export class ConnectServer {
       policy,
       runtimeGrant,
       context.req.raw.signal,
+      expectedActionDigest,
     );
     const completed = await this.options.idempotency.complete({
       keyHash,
@@ -672,6 +721,7 @@ export class ConnectServer {
     policy: ActionPolicySnapshot,
     runtimeGrant: RuntimeGrant | undefined,
     signal: AbortSignal | undefined,
+    expectedActionDigest?: string,
   ): Promise<RuntimeActionHttpResult> {
     try {
       const run = await this.options.actions.run({
@@ -681,6 +731,7 @@ export class ConnectServer {
         connectionName,
         policy,
         runtimeTokenId: runtimeGrant?.tokenId,
+        expectedActionDigest,
         signal,
       });
       if (!run) {
@@ -694,6 +745,9 @@ export class ConnectServer {
         result: run.result,
       });
     } catch (error) {
+      if (error instanceof CatalogChangedError) {
+        return serializeRuntimeFailure({ status: 409, errorCode: "action_digest_changed", message: error.message });
+      }
       if (error instanceof ConnectionError) {
         return serializeRuntimeFailure({
           status: mapConnectionErrorStatus(error),

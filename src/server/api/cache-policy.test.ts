@@ -4,9 +4,8 @@ import { getResponseCachePolicy } from "./cache-policy.ts";
 describe("getResponseCachePolicy", () => {
   it("returns public cache headers only for successful or 304 catalog reads", () => {
     expect(getResponseCachePolicy("GET", "/v1/actions/example.echo", 200)).toEqual({
-      cacheControl: "public, max-age=0, must-revalidate",
-      cloudflareCdnCacheControl: "public, max-age=31536000, stale-while-revalidate=86400",
-      vary: "Authorization, Cookie, Accept-Encoding",
+      cacheControl: "no-store",
+      cloudflareCdnCacheControl: "no-store",
     });
     expect(getResponseCachePolicy("HEAD", "/api/providers/example", 204)).toEqual({
       cacheControl: "public, max-age=0, must-revalidate",
@@ -26,6 +25,7 @@ describe("getResponseCachePolicy", () => {
     });
     expect(getResponseCachePolicy("GET", "/v1/actions/search", 200)).toEqual({
       cacheControl: "no-store",
+      cloudflareCdnCacheControl: "no-store",
     });
     expect(getResponseCachePolicy("GET", "/api/providers/missing", 404)).toEqual({
       cacheControl: "no-store",

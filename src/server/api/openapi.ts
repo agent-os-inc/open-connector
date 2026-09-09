@@ -229,7 +229,8 @@ export function createOpenApiDocument(
       items: { $ref: "#/components/schemas/ActionSearchResult" },
     }),
     "/v1/providers": runtimeGetOperation("Catalog", "List public provider catalog entries.", {
-      description: "Closest HTTP analog of MCP list_apps. Categories are objects; MCP list_apps returns strings.",
+      description:
+        "Closest HTTP analog of MCP list_apps. Categories are objects; MCP list_apps returns strings. X-OpenConnector-Catalog-Generation identifies the immutable broker catalog. Send X-OpenConnector-Expected-Generation on subsequent discovery requests; mismatch returns 409. Runtime reads use no-store.",
       parameters: [
         queryParameter(
           "q",
@@ -243,7 +244,8 @@ export function createOpenApiDocument(
       data: jsonSchema.array({ $ref: "#/components/schemas/RuntimeProviderMetadata" }),
     }),
     "/v1/actions": runtimeGetOperation("Catalog", "List action services, or actions for one service.", {
-      description: "Without service, data is [{service}]. With service, data is RuntimeActionMetadata.",
+      description:
+        "Without service, data is [{service}]. With service, data is RuntimeActionMetadata. X-OpenConnector-Catalog-Generation pins the aggregate; X-OpenConnector-Expected-Generation rejects a different generation with 409.",
       parameters: [queryParameter("service", "Provider service id. Omit to list services instead of actions.")],
       data: jsonSchema.anyOf("Runtime action index payload.", [
         jsonSchema.array({ $ref: "#/components/schemas/RuntimeActionService" }),
@@ -1105,6 +1107,8 @@ function createRunPath(): Record<string, unknown> {
     get: {
       tags: ["Catalog"],
       summary: "Get one runtime action.",
+      description:
+        "Returns X-OpenConnector-Catalog-Generation and X-OpenConnector-Action-Digest headers. Pin discovery with X-OpenConnector-Expected-Generation; a different generation returns 409. Runtime catalog reads use no-store.",
       parameters: [actionIdParameter],
       responses: {
         200: jsonResponse(runtimeSuccessSchema({ $ref: "#/components/schemas/RuntimeActionMetadata" })),
@@ -1116,7 +1120,8 @@ function createRunPath(): Record<string, unknown> {
       summary: "Execute a runtime action.",
       description:
         "Use the action catalog to discover provider-specific input and output schemas. For a compact strongly typed OpenAPI document for one action, request /openapi.json?actionId=<actionId>. " +
-        actionIdempotencyDescription,
+        actionIdempotencyDescription +
+        " Send X-OpenConnector-Expected-Action-Digest from action discovery to require the reviewed broker definition. Mismatch returns 409 before dispatch or replay. The digest is part of the idempotency fingerprint; omitting or changing it with the same key conflicts. This does not replace current account/runtime policy checks.",
       parameters: [actionIdParameter, idempotencyKeyParameter, ...namedConnectionParameters],
       requestBody: actionRunBody(
         jsonSchema.unknownObject("Action input matching the catalog schema. Omitted input is treated as {}."),
