@@ -108,7 +108,12 @@ export const quickBooksOnlineActions: readonly ProviderActionDefinition[] = [
       "The response is Intuit's report body as received, with its Debit and Credit columns and " +
       "nested row structure intact, because the consumer of a trial balance parses that shape " +
       "directly. Unlike the Profit and Loss and Balance Sheet actions, this action performs no " +
-      "normalization, and normalizing it would break that consumer.",
+      "normalization, and normalizing it would break that consumer. Account balances are read " +
+      "as of as_of_date; the request covers January 1 of that year through as_of_date, so " +
+      "period-scoped income and expense accounts reflect that window rather than a fiscal year " +
+      "beginning in another month. Only the 2 MiB response cap bounds the body: row depth, cell " +
+      "count and cell length are unbounded within it, and account identifiers Intuit puts on " +
+      "report rows are returned rather than redacted.",
     inputSchema: s.object(
       "Required Trial Balance report parameters.",
       { as_of_date: date, accounting_method: accountingMethod },

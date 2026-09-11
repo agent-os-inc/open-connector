@@ -136,9 +136,14 @@ async function getReport(context: QuickBooksContext, request: ReportRequest): Pr
  * columns. `summarize_column_by=Total` collapses them into one money column, so
  * this read omits that parameter, and the response is returned unprojected: the
  * normalized column-and-row-tree shape the Profit and Loss and Balance Sheet
- * reads emit has no place to carry two money columns per row. The response
- * bounds the sibling reads enforce still apply, because the shared read path
- * rejects a body over the byte cap before it is ever returned.
+ * reads emit has no place to carry two money columns per row.
+ *
+ * Only the response byte cap bounds this read. The row-depth, cell-count and
+ * cell-length limits live in the projection the sibling reads perform, so a
+ * trial balance is bounded at 2 MiB and unbounded within it. The header
+ * assertion is the one check that survives, so that an empty or non-report body
+ * fails here as a provider error rather than reaching a caller as a successful
+ * trial balance; it reads the report identity without reshaping the response.
  */
 async function getTrialBalance(
   context: QuickBooksContext,
@@ -148,7 +153,12 @@ async function getTrialBalance(
   url.searchParams.set("start_date", request.startDate);
   url.searchParams.set("end_date", request.endDate);
   url.searchParams.set("accounting_method", request.accountingMethod);
-  return getQuickBooksJson(url, context);
+  const payload = await getQuickBooksJson(url, context);
+  const header = requireRecord(readCaseInsensitive(payload, "Header"), "Header");
+  if (requireBoundedString(readCaseInsensitive(header, "ReportName"), "Header.ReportName") !== "TrialBalance") {
+    throw new ProviderRequestError(502, "QuickBooks Online returned mismatched report metadata.");
+  }
+  return payload;
 }
 
 function createCompanyUrl(context: Pick<QuickBooksContext, "realmId" | "providerConfig">, path: string): URL {

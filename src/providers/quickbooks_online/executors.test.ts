@@ -96,8 +96,9 @@ function reportFixture(
 }
 
 /**
- * Intuit's documented TrialBalance response shape: two native money columns,
- * one leaf row per account, and header fields the normalized reports drop.
+ * Intuit's TrialBalance response as the provider sends it: an untitled account
+ * column beside native Debit and Credit money columns, one leaf row per
+ * account, and a trailing GrandTotal section row.
  */
 function trialBalanceFixture() {
   return {
@@ -112,15 +113,20 @@ function trialBalanceFixture() {
     },
     Columns: {
       Column: [
-        { ColTitle: "Account", ColType: "Account" },
-        { ColTitle: "Debit", ColType: "Money" },
-        { ColTitle: "Credit", ColType: "Money" },
+        { ColType: "Account", ColTitle: "" },
+        { ColType: "Money", ColTitle: "Debit" },
+        { ColType: "Money", ColTitle: "Credit" },
       ],
     },
     Rows: {
       Row: [
         { ColData: [{ id: "35", value: "Checking" }, { value: "4151.74" }, { value: "" }] },
         { ColData: [{ id: "13", value: "Meals and Entertainment" }, { value: "" }, { value: "46.00" }] },
+        {
+          group: "GrandTotal",
+          type: "Section",
+          Summary: { ColData: [{ value: "TOTAL" }, { value: "4197.74" }, { value: "4197.74" }] },
+        },
       ],
     },
   };
@@ -249,10 +255,12 @@ describe("QuickBooks Online read-only pilot", () => {
 
     expect(result).toEqual({ ok: true, output: fixture });
     expect(
-      (result.output as { Columns: { Column: Array<{ ColTitle: string }> } }).Columns.Column.map(
-        (column) => column.ColTitle,
-      ),
-    ).toEqual(["Account", "Debit", "Credit"]);
+      (result.output as { Columns: { Column: Array<{ ColTitle: string; ColType: string }> } }).Columns.Column,
+    ).toEqual([
+      { ColType: "Account", ColTitle: "" },
+      { ColType: "Money", ColTitle: "Debit" },
+      { ColType: "Money", ColTitle: "Credit" },
+    ]);
     expect(result.output).not.toHaveProperty("rows");
     expect(result.output).not.toHaveProperty("columns");
   });
@@ -291,6 +299,56 @@ describe("QuickBooks Online read-only pilot", () => {
     );
 
     expect(result).toMatchObject({ ok: false, error: { code: "provider_response_too_large" } });
+  });
+
+  it.each([
+    { label: "an empty body", payload: {} },
+    { label: "another report", payload: { Header: { ReportName: "BalanceSheet" } } },
+  ])("fails a Trial Balance read that comes back as $label", async ({ payload }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(payload)),
+    );
+
+    const result = await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      context(),
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "provider_error", details: { status: 502 } } });
+  });
+
+  it("carries deeply nested rows and long cells through, bounded only by the response cap", async () => {
+    const deepRow = (levels: number): Record<string, unknown> =>
+      levels === 1
+        ? { ColData: [{ value: "x".repeat(5_000) }, { value: "1.00" }, { value: "" }] }
+        : { type: "Section", Rows: { Row: [deepRow(levels - 1)] } };
+    const body = { ...trialBalanceFixture(), Rows: { Row: [deepRow(40)] } };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(body)),
+    );
+
+    const result = await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      context(),
+    );
+
+    expect(result).toEqual({ ok: true, output: body });
+  });
+
+  it("returns the account identifiers Intuit puts on report rows", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(trialBalanceFixture())),
+    );
+
+    const result = await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      context(),
+    );
+
+    expect(JSON.stringify(result.output)).toContain('"id":"35"');
   });
 
   it("refuses a Trial Balance read without a QuickBooks connection", async () => {
@@ -633,6 +691,8 @@ describe("QuickBooks Online read-only pilot", () => {
     expect(action?.outputSchema).toMatchObject({ type: "object", additionalProperties: true });
     expect(action?.outputSchema).not.toHaveProperty("properties");
     expect(action?.description).toMatch(/provider's own report shape/);
+    expect(action?.description).toMatch(/January 1 of that year through as_of_date/);
+    expect(action?.description).toMatch(/2 MiB response cap/);
   });
 });
 
