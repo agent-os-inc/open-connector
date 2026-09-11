@@ -35,6 +35,12 @@ interface ReportRequest {
   asOfDate?: string;
 }
 
+interface TrialBalanceRequest {
+  accountingMethod: "Cash" | "Accrual";
+  startDate: string;
+  endDate: string;
+}
+
 export const executors: ProviderExecutors = defineOAuthProviderExecutors(service, {
   async get_company_info(_input, context) {
     return projectCompanyInfo(await getCompanyInfo(toQuickBooksContext(context)));
@@ -58,6 +64,14 @@ export const executors: ProviderExecutors = defineOAuthProviderExecutors(service
       startDate: `${asOfDate.slice(0, 4)}-01-01`,
       endDate: asOfDate,
       asOfDate,
+    });
+  },
+  async get_trial_balance(input, context) {
+    const asOfDate = requireDate(input.as_of_date, "as_of_date");
+    return getTrialBalance(toQuickBooksContext(context), {
+      accountingMethod: requireAccountingMethod(input.accounting_method),
+      startDate: `${asOfDate.slice(0, 4)}-01-01`,
+      endDate: asOfDate,
     });
   },
 });
@@ -112,6 +126,43 @@ async function getReport(context: QuickBooksContext, request: ReportRequest): Pr
   url.searchParams.set("accounting_method", request.accountingMethod);
   url.searchParams.set("summarize_column_by", "Total");
   return projectReport(await getQuickBooksJson(url, context), request);
+}
+
+/**
+ * Read Intuit's TrialBalance report and return its body as received.
+ *
+ * A trial balance carries its amounts in native Debit and Credit columns, and
+ * its consumer sums them with an accounting sign convention read from those two
+ * columns. The response is returned unprojected because the normalized
+ * column-and-row-tree shape the Profit and Loss and Balance Sheet reads emit has
+ * no place to carry two money columns per row.
+ *
+ * `summarize_column_by` is left unset. The sibling reads pin it to `Total`, but
+ * on this report it selects nothing: a trial balance is already summarized that
+ * way, and the parameter neither collapses the two money columns nor changes the
+ * response, so sending it would only imply a control this report does not have.
+ *
+ * Only the response byte cap bounds this read. The row-depth, cell-count and
+ * cell-length limits live in the projection the sibling reads perform, so a
+ * trial balance is bounded at 2 MiB and unbounded within it. The header
+ * assertion is the one check that survives, so that an empty or non-report body
+ * fails here as a provider error rather than reaching a caller as a successful
+ * trial balance; it reads the report identity without reshaping the response.
+ */
+async function getTrialBalance(
+  context: QuickBooksContext,
+  request: TrialBalanceRequest,
+): Promise<Record<string, unknown>> {
+  const url = createCompanyUrl(context, "reports/TrialBalance");
+  url.searchParams.set("start_date", request.startDate);
+  url.searchParams.set("end_date", request.endDate);
+  url.searchParams.set("accounting_method", request.accountingMethod);
+  const payload = await getQuickBooksJson(url, context);
+  const header = requireRecord(readCaseInsensitive(payload, "Header"), "Header");
+  if (requireBoundedString(readCaseInsensitive(header, "ReportName"), "Header.ReportName") !== "TrialBalance") {
+    throw new ProviderRequestError(502, "QuickBooks Online returned mismatched report metadata.");
+  }
+  return payload;
 }
 
 function createCompanyUrl(context: Pick<QuickBooksContext, "realmId" | "providerConfig">, path: string): URL {

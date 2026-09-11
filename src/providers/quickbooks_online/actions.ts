@@ -64,6 +64,10 @@ const reportOutput = s.object(
   { optional: ["as_of_date", "currency"], defs: { reportRow } },
 );
 
+const trialBalanceOutput = s.unknownObject(
+  "Intuit's TrialBalance report response as received, including its Debit and Credit columns.",
+);
+
 export const quickBooksOnlineActions: readonly ProviderActionDefinition[] = [
   defineProviderAction(service, {
     name: "get_company_info",
@@ -94,6 +98,30 @@ export const quickBooksOnlineActions: readonly ProviderActionDefinition[] = [
       { required: ["as_of_date", "accounting_method"] },
     ),
     outputSchema: reportOutput,
+    requiredScopes: permissions,
+    providerPermissions: permissions,
+  }),
+  defineProviderAction(service, {
+    name: "get_trial_balance",
+    description:
+      "Get a QuickBooks Online Trial Balance report in the provider's own report shape. " +
+      "The response is Intuit's report body as received, with its Debit and Credit columns and " +
+      "nested row structure intact, because the consumer of a trial balance parses that shape " +
+      "directly. Unlike the Profit and Loss and Balance Sheet actions, this action performs no " +
+      "normalization, and normalizing it would break that consumer. Balances are reported as of " +
+      "as_of_date, and the start of the requested range does not select data. Asset, liability " +
+      "and equity balances carry forward across financial years; income and expense accounts are " +
+      "reported for the financial year containing as_of_date, so comparing them across companies " +
+      "whose financial years start in different months requires adjustment, and get_company_info " +
+      "reports fiscal_year_start_month. Only the 2 MiB response cap bounds the body: row depth, " +
+      "cell count and cell length are unbounded within it, and account identifiers Intuit puts " +
+      "on report rows are returned rather than redacted.",
+    inputSchema: s.object(
+      "Required Trial Balance report parameters.",
+      { as_of_date: date, accounting_method: accountingMethod },
+      { required: ["as_of_date", "accounting_method"] },
+    ),
+    outputSchema: trialBalanceOutput,
     requiredScopes: permissions,
     providerPermissions: permissions,
   }),
