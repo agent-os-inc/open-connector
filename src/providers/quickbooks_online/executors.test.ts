@@ -96,11 +96,28 @@ function reportFixture(
 }
 
 /**
- * Intuit's TrialBalance response as the provider sends it: an untitled account
- * column beside native Debit and Credit money columns, one leaf row per
- * account, and a trailing GrandTotal section row.
+ * A TrialBalance response body.
+ *
+ * `v2` selects Intuit's modernized report service, which serves every report
+ * response: empty strings rather than zeroes for absent values, `Section` as
+ * the row type of an enclosing section whether or not it is empty, Title Case
+ * column titles, `StartPeriod` and `EndPeriod` always present, and no `qzurl`.
+ * The container shape and key casing follow the convention the sibling report
+ * fixture already uses for its v2 variant. Neither variant is a captured live
+ * body, so the v1 variant's untitled account column is what the pre-modern
+ * service documented rather than a claim about what arrives today.
  */
-function trialBalanceFixture() {
+function trialBalanceFixture(options: { v2?: boolean } = {}) {
+  const accountColumn = options.v2 ? { coltype: "Account", coltitle: "Account" } : { ColType: "Account", ColTitle: "" };
+  const rows = [
+    { ColData: [{ id: "35", value: "Checking" }, { value: "4151.74" }, { value: "" }] },
+    { ColData: [{ id: "13", value: "Meals and Entertainment" }, { value: "" }, { value: "46.00" }] },
+  ];
+  const grandTotal = {
+    group: "GrandTotal",
+    type: "Section",
+    Summary: { ColData: [{ value: "TOTAL" }, { value: "4197.74" }, { value: "4197.74" }] },
+  };
   return {
     Header: {
       ReportName: "TrialBalance",
@@ -111,24 +128,14 @@ function trialBalanceFixture() {
       Currency: "USD",
       Time: "2026-06-01T10:11:07-07:00",
     },
-    Columns: {
-      Column: [
-        { ColType: "Account", ColTitle: "" },
-        { ColType: "Money", ColTitle: "Debit" },
-        { ColType: "Money", ColTitle: "Credit" },
-      ],
-    },
-    Rows: {
-      Row: [
-        { ColData: [{ id: "35", value: "Checking" }, { value: "4151.74" }, { value: "" }] },
-        { ColData: [{ id: "13", value: "Meals and Entertainment" }, { value: "" }, { value: "46.00" }] },
-        {
-          group: "GrandTotal",
-          type: "Section",
-          Summary: { ColData: [{ value: "TOTAL" }, { value: "4197.74" }, { value: "4197.74" }] },
+    Columns: options.v2
+      ? [accountColumn, { coltype: "Money", coltitle: "Debit" }, { coltype: "Money", coltitle: "Credit" }]
+      : {
+          Column: [accountColumn, { ColType: "Money", ColTitle: "Debit" }, { ColType: "Money", ColTitle: "Credit" }],
         },
-      ],
-    },
+    Rows: options.v2
+      ? [...rows.map((row) => ({ Type: "Data", ...row })), { ...grandTotal, Type: "Section" }]
+      : { Row: [...rows, grandTotal] },
   };
 }
 
@@ -243,17 +250,36 @@ describe("QuickBooks Online read-only pilot", () => {
     });
   });
 
-  it("returns the Trial Balance report body as received, with Debit and Credit columns intact", async () => {
+  it.each([false, true])(
+    "returns the Trial Balance report body as received, with Debit and Credit columns intact (v2=%s)",
+    async (v2) => {
+      const fixture = trialBalanceFixture({ v2 });
+      const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(fixture));
+      vi.stubGlobal("fetch", fetch);
+
+      const result = await executors["quickbooks_online.get_trial_balance"]!(
+        { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+        context(),
+      );
+
+      expect(result).toEqual({ ok: true, output: fixture });
+      expect(result.output).not.toHaveProperty("rows");
+      expect(result.output).not.toHaveProperty("columns");
+    },
+  );
+
+  it("preserves each money column of an untitled-account v1 body", async () => {
     const fixture = trialBalanceFixture();
-    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(fixture));
-    vi.stubGlobal("fetch", fetch);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(fixture)),
+    );
 
     const result = await executors["quickbooks_online.get_trial_balance"]!(
       { as_of_date: "2026-05-31", accounting_method: "Accrual" },
       context(),
     );
 
-    expect(result).toEqual({ ok: true, output: fixture });
     expect(
       (result.output as { Columns: { Column: Array<{ ColTitle: string; ColType: string }> } }).Columns.Column,
     ).toEqual([
@@ -261,8 +287,25 @@ describe("QuickBooks Online read-only pilot", () => {
       { ColType: "Money", ColTitle: "Debit" },
       { ColType: "Money", ColTitle: "Credit" },
     ]);
-    expect(result.output).not.toHaveProperty("rows");
-    expect(result.output).not.toHaveProperty("columns");
+  });
+
+  it("preserves each money column of a modernized-service body", async () => {
+    const fixture = trialBalanceFixture({ v2: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(fixture)),
+    );
+
+    const result = await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      context(),
+    );
+
+    expect(result.output).toHaveProperty("Columns", [
+      { coltype: "Account", coltitle: "Account" },
+      { coltype: "Money", coltitle: "Debit" },
+      { coltype: "Money", coltitle: "Credit" },
+    ]);
   });
 
   it("requests the connection's realm without collapsing the two money columns", async () => {
@@ -691,7 +734,7 @@ describe("QuickBooks Online read-only pilot", () => {
     expect(action?.outputSchema).toMatchObject({ type: "object", additionalProperties: true });
     expect(action?.outputSchema).not.toHaveProperty("properties");
     expect(action?.description).toMatch(/provider's own report shape/);
-    expect(action?.description).toMatch(/January 1 of that year through as_of_date/);
+    expect(action?.description).toMatch(/read Header\.StartPeriod for the window Intuit actually applied/);
     expect(action?.description).toMatch(/2 MiB response cap/);
   });
 });

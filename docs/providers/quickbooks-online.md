@@ -49,9 +49,18 @@ reasons:
   and period labels agree with what was requested. Projecting here would mean a
   second parser against a second shape for no behavioural gain.
 
-Intuit's report shape for this read has an untitled first column of type
-`Account`, `Debit` and `Credit` money columns, one leaf row per account, and a
-trailing `GrandTotal` section row.
+Intuit's report shape for this read has an account column of type `Account`,
+`Debit` and `Credit` money columns, one leaf row per account, and a trailing
+`GrandTotal` section row.
+
+Every report response is served by Intuit's modernized report service. That
+service returns an empty string rather than a zero for an absent value, types an
+enclosing section row `Section` whether or not it is empty, returns column titles
+in Title Case, always returns `StartPeriod` and `EndPeriod`, generates row order
+dynamically so row index positions are not stable, always nests a child account
+under its parent, and does not support `qzurl`. A caller must key off row and
+column identity rather than position, and must not assume a column title is
+non-empty.
 
 ### What bounds and redactions apply
 
@@ -82,13 +91,11 @@ period or a date macro rather than a bare as-of date.
 
 Account balances are as-of values, but a trial balance also lists period-scoped
 income and expense accounts, so the window is load-bearing for those rows in a
-way it is not for a balance sheet. For a company whose financial year does not
-start in January, whether those rows follow the requested `start_date` or the
-company's own financial-year start is Intuit's behaviour to determine, and
-`get_company_info` exposes `fiscal_year_start_month` so a caller can see when
-the two differ. Confirming which one Intuit applies needs one request against a
-company with a non-January year start, comparing an expense account's amount and
-the returned `Header.StartPeriod` across two `start_date` values.
+way it is not for a balance sheet. `Header.StartPeriod` reports the window Intuit
+actually applied, which is where a caller should read it from: whether those rows
+follow the requested `start_date` or the company's own financial-year start is
+Intuit's behaviour to determine, and `get_company_info` exposes
+`fiscal_year_start_month` so a caller can see when the two differ.
 
 References:
 
@@ -96,3 +103,4 @@ References:
 - [Intuit OAuth security requirements](https://developer.intuit.com/app/developer/qbo/docs/go-live/publish-app/security-requirements)
 - [QuickBooks Online reports](https://developer.intuit.com/app/developer/qbo/docs/workflows/run-reports)
 - [Intuit TrialBalance report](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/report-entities/trialbalance)
+- [Reports API modernization response differences](https://medium.com/intuitdev/upcoming-changes-to-reports-apis-5083ec9aadce)
