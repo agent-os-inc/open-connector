@@ -102,10 +102,14 @@ function reportFixture(
  * response: empty strings rather than zeroes for absent values, `Section` as
  * the row type of an enclosing section whether or not it is empty, Title Case
  * column titles, `StartPeriod` and `EndPeriod` always present, and no `qzurl`.
- * The container shape and key casing follow the convention the sibling report
- * fixture already uses for its v2 variant. Neither variant is a captured live
- * body, so the v1 variant's untitled account column is what the pre-modern
- * service documented rather than a claim about what arrives today.
+ * Container shapes and key casing follow the convention the sibling report
+ * fixture uses for its own v2 variant: bare arrays where v1 wraps a list in a
+ * single-key object, and TitleCase row keys.
+ *
+ * Neither variant is a captured live body. The v1 variant's untitled account
+ * column is what the pre-modern service documented, and the v2 variant's
+ * container forms are this repository's model of the modernized service, so
+ * neither is evidence of what arrives today.
  */
 function trialBalanceFixture(options: { v2?: boolean } = {}) {
   const accountColumn = options.v2 ? { coltype: "Account", coltitle: "Account" } : { ColType: "Account", ColTitle: "" };
@@ -113,11 +117,7 @@ function trialBalanceFixture(options: { v2?: boolean } = {}) {
     { ColData: [{ id: "35", value: "Checking" }, { value: "4151.74" }, { value: "" }] },
     { ColData: [{ id: "13", value: "Meals and Entertainment" }, { value: "" }, { value: "46.00" }] },
   ];
-  const grandTotal = {
-    group: "GrandTotal",
-    type: "Section",
-    Summary: { ColData: [{ value: "TOTAL" }, { value: "4197.74" }, { value: "4197.74" }] },
-  };
+  const grandTotalCells = [{ value: "TOTAL" }, { value: "4197.74" }, { value: "4197.74" }];
   return {
     Header: {
       ReportName: "TrialBalance",
@@ -134,8 +134,13 @@ function trialBalanceFixture(options: { v2?: boolean } = {}) {
           Column: [accountColumn, { ColType: "Money", ColTitle: "Debit" }, { ColType: "Money", ColTitle: "Credit" }],
         },
     Rows: options.v2
-      ? [...rows.map((row) => ({ Type: "Data", ...row })), { ...grandTotal, Type: "Section" }]
-      : { Row: [...rows, grandTotal] },
+      ? [
+          ...rows.map((row) => ({ Type: "Data", ...row })),
+          { Type: "Section", Group: "GrandTotal", Summary: grandTotalCells },
+        ]
+      : {
+          Row: [...rows, { type: "Section", group: "GrandTotal", Summary: { ColData: grandTotalCells } }],
+        },
   };
 }
 
