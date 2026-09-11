@@ -99,14 +99,21 @@ function reportFixture(
  * A TrialBalance response body, captured verbatim from Intuit.
  *
  * Taken from a live `GET /v3/company/{realmId}/reports/TrialBalance` against a
- * QuickBooks Online sandbox company, trimmed to three account rows. Every key,
- * container form and value spelling below is what the service returned: the
- * account column carries an **empty** `ColTitle` and identifies itself by
- * `ColType`, `Columns` and `Rows` each wrap their list in a single-key object,
- * the money columns are titled `Debit` and `Credit`, an account with no balance
- * is `"0.00"` rather than an empty string, each row carries Intuit's account
- * identifier, and the report ends in a `GrandTotal` section row whose `Summary`
- * wraps its cells in `ColData`.
+ * QuickBooks Online sandbox company. Every key, container form and value
+ * spelling below is what the service returned: the account column carries an
+ * **empty** `ColTitle` and identifies itself by `ColType`, `Columns` and `Rows`
+ * each wrap their list in a single-key object, the money columns are titled
+ * `Debit` and `Credit`, an account with no balance is `"0.00"` rather than an
+ * empty string, a row's unused money column is an empty string, each row carries
+ * Intuit's account identifier, sub-accounts appear as colon-joined paths, and
+ * the report ends in a `GrandTotal` section row whose `Summary` wraps its cells
+ * in `ColData`.
+ *
+ * The row set is the captured report's first three accounts plus three later
+ * rows chosen so that both money columns and both sides of the ledger are
+ * exercised: credit-balance rows and a non-asset debit row. Rows between them
+ * are omitted, so the retained rows do not reconcile to the captured
+ * `GrandTotal`, which is reproduced as returned rather than recomputed.
  *
  * `Header.StartPeriod` echoes the requested `start_date` rather than reporting a
  * window the service applied, and `Header.SummarizeColumnsBy` reads `Total` even
@@ -136,6 +143,15 @@ function trialBalanceFixture() {
         { ColData: [{ value: "Checking", id: "35" }, { value: "4875.00" }, { value: "" }] },
         { ColData: [{ value: "Accounts Receivable (A/R)", id: "84" }, { value: "0.00" }, { value: "" }] },
         { ColData: [{ value: "Undeposited Funds", id: "4" }, { value: "226.75" }, { value: "" }] },
+        {
+          ColData: [
+            { value: "Landscaping Services:Job Materials:Plants and Soil", id: "49" },
+            { value: "" },
+            { value: "131.25" },
+          ],
+        },
+        { ColData: [{ value: "Pest Control Services", id: "54" }, { value: "" }, { value: "70.00" }] },
+        { ColData: [{ value: "Legal & Professional Fees:Lawyer", id: "71" }, { value: "300.00" }, { value: "" }] },
         {
           Summary: { ColData: [{ value: "TOTAL" }, { value: "5401.75" }, { value: "5401.75" }] },
           type: "Section",
@@ -291,6 +307,29 @@ describe("QuickBooks Online read-only pilot", () => {
       { ColTitle: "Debit", ColType: "Money" },
       { ColTitle: "Credit", ColType: "Money" },
     ]);
+  });
+
+  it("preserves credit-side amounts, not just the Credit column heading", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(trialBalanceFixture())),
+    );
+
+    const result = await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      context(),
+    );
+
+    const rows = (result.output as { Rows: { Row: Array<{ ColData?: Array<{ value: string }> }> } }).Rows.Row;
+    const amounts = rows
+      .filter((row) => row.ColData !== undefined)
+      .map((row) => [row.ColData![0]!.value, row.ColData![1]!.value, row.ColData![2]!.value]);
+
+    expect(amounts).toContainEqual(["Pest Control Services", "", "70.00"]);
+    expect(amounts).toContainEqual(["Landscaping Services:Job Materials:Plants and Soil", "", "131.25"]);
+    expect(amounts).toContainEqual(["Legal & Professional Fees:Lawyer", "300.00", ""]);
+    expect(amounts.filter(([, debit]) => debit !== "").length).toBeGreaterThan(0);
+    expect(amounts.filter(([, , credit]) => credit !== "").length).toBeGreaterThan(0);
   });
 
   it("preserves the GrandTotal row and its ColData-wrapped summary", async () => {
@@ -738,7 +777,7 @@ describe("QuickBooks Online read-only pilot", () => {
     expect(action?.outputSchema).toMatchObject({ type: "object", additionalProperties: true });
     expect(action?.outputSchema).not.toHaveProperty("properties");
     expect(action?.description).toMatch(/provider's own report shape/);
-    expect(action?.description).toMatch(/cumulative as of as_of_date/);
+    expect(action?.description).toMatch(/financial year containing as_of_date/);
     expect(action?.description).toMatch(/2 MiB response cap/);
   });
 });

@@ -64,6 +64,13 @@ reads `Total` even though the report keeps both money columns, and `StartPeriod`
 echoes the requested `start_date` rather than reporting a window the service
 applied.
 
+A capture records what one company returned, not what the service guarantees.
+Intuit's report service generates row order dynamically and does not guarantee
+row index positions, nests a child account under its parent, and types an
+enclosing section row `Section`. A caller must therefore key off row and column
+identity — `ColType` for the account column, `group` for the `GrandTotal` row —
+rather than position, and must not assume a column title is non-empty.
+
 ### What bounds and redactions apply
 
 The 2 MiB response byte cap is the only bound that survives, and it rejects an
@@ -91,12 +98,24 @@ The read requests January 1 of the as-of year through the requested as-of date,
 because Intuit's report service requires an explicit period or a date macro
 rather than a bare as-of date.
 
-Only the end of that range selects data. A trial balance reports cumulative
-balances as of `end_date`, including for income and expense accounts, and
-narrowing `start_date` to a two-day window returns byte-identical rows. The
-range start is therefore a required parameter with no effect on the result, and
-a caller does not need to reason about it or about the company's financial-year
-start.
+Only the end of that range selects data. Varying `start_date` from 2000-01-01 to
+a two-day window, against a fixed `end_date`, returns byte-identical rows.
+
+Balances are reported as of `end_date`, on QuickBooks' own two-tier convention:
+asset, liability and equity balances carry forward across financial years, while
+income and expense accounts are reported for the financial year containing
+`end_date`, because a prior year's profit and loss is closed into retained
+earnings at year end. Two companies whose financial years start in different
+months therefore produce income and expense figures covering different spans,
+and comparing them requires adjustment. `get_company_info` reports
+`fiscal_year_start_month`, which is what a caller needs to detect that case.
+
+The financial-year scoping is QuickBooks' documented reporting convention rather
+than a behaviour this repository has measured: the captured fixture covers a
+single financial year, so it cannot distinguish year-scoped income rows from
+cumulative ones. Confirming it takes one pair of requests differing only in
+`end_date` across a year boundary, comparing an income account with activity in
+both years.
 
 References:
 
@@ -105,3 +124,4 @@ References:
 - [QuickBooks Online reports](https://developer.intuit.com/app/developer/qbo/docs/workflows/run-reports)
 - [Intuit TrialBalance report](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/report-entities/trialbalance)
 - [Reports API modernization response differences](https://medium.com/intuitdev/upcoming-changes-to-reports-apis-5083ec9aadce)
+- [QuickBooks Balance Sheet reporting convention](https://quickbooks.intuit.com/learn-support/en-us/help-article/balance-sheet/balance-sheet-report/L9NRqupae_US_en_US)
