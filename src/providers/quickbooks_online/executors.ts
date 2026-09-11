@@ -35,6 +35,12 @@ interface ReportRequest {
   asOfDate?: string;
 }
 
+interface TrialBalanceRequest {
+  accountingMethod: "Cash" | "Accrual";
+  startDate: string;
+  endDate: string;
+}
+
 export const executors: ProviderExecutors = defineOAuthProviderExecutors(service, {
   async get_company_info(_input, context) {
     return projectCompanyInfo(await getCompanyInfo(toQuickBooksContext(context)));
@@ -58,6 +64,14 @@ export const executors: ProviderExecutors = defineOAuthProviderExecutors(service
       startDate: `${asOfDate.slice(0, 4)}-01-01`,
       endDate: asOfDate,
       asOfDate,
+    });
+  },
+  async get_trial_balance(input, context) {
+    const asOfDate = requireDate(input.as_of_date, "as_of_date");
+    return getTrialBalance(toQuickBooksContext(context), {
+      accountingMethod: requireAccountingMethod(input.accounting_method),
+      startDate: `${asOfDate.slice(0, 4)}-01-01`,
+      endDate: asOfDate,
     });
   },
 });
@@ -112,6 +126,29 @@ async function getReport(context: QuickBooksContext, request: ReportRequest): Pr
   url.searchParams.set("accounting_method", request.accountingMethod);
   url.searchParams.set("summarize_column_by", "Total");
   return projectReport(await getQuickBooksJson(url, context), request);
+}
+
+/**
+ * Read Intuit's TrialBalance report and return its body as received.
+ *
+ * A trial balance carries its amounts in native Debit and Credit columns, and
+ * its consumer sums them with an accounting sign convention read from those two
+ * columns. `summarize_column_by=Total` collapses them into one money column, so
+ * this read omits that parameter, and the response is returned unprojected: the
+ * normalized column-and-row-tree shape the Profit and Loss and Balance Sheet
+ * reads emit has no place to carry two money columns per row. The response
+ * bounds the sibling reads enforce still apply, because the shared read path
+ * rejects a body over the byte cap before it is ever returned.
+ */
+async function getTrialBalance(
+  context: QuickBooksContext,
+  request: TrialBalanceRequest,
+): Promise<Record<string, unknown>> {
+  const url = createCompanyUrl(context, "reports/TrialBalance");
+  url.searchParams.set("start_date", request.startDate);
+  url.searchParams.set("end_date", request.endDate);
+  url.searchParams.set("accounting_method", request.accountingMethod);
+  return getQuickBooksJson(url, context);
 }
 
 function createCompanyUrl(context: Pick<QuickBooksContext, "realmId" | "providerConfig">, path: string): URL {

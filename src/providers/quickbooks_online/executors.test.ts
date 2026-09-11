@@ -95,6 +95,37 @@ function reportFixture(
   };
 }
 
+/**
+ * Intuit's documented TrialBalance response shape: two native money columns,
+ * one leaf row per account, and header fields the normalized reports drop.
+ */
+function trialBalanceFixture() {
+  return {
+    Header: {
+      ReportName: "TrialBalance",
+      Option: [{ Name: "NoReportData", Value: "false" }],
+      ReportBasis: "Accrual",
+      StartPeriod: "2026-01-01",
+      EndPeriod: "2026-05-31",
+      Currency: "USD",
+      Time: "2026-06-01T10:11:07-07:00",
+    },
+    Columns: {
+      Column: [
+        { ColTitle: "Account", ColType: "Account" },
+        { ColTitle: "Debit", ColType: "Money" },
+        { ColTitle: "Credit", ColType: "Money" },
+      ],
+    },
+    Rows: {
+      Row: [
+        { ColData: [{ id: "35", value: "Checking" }, { value: "4151.74" }, { value: "" }] },
+        { ColData: [{ id: "13", value: "Meals and Entertainment" }, { value: "" }, { value: "46.00" }] },
+      ],
+    },
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -204,6 +235,75 @@ describe("QuickBooks Online read-only pilot", () => {
       accounting_method: "Cash",
       summarize_column_by: "Total",
     });
+  });
+
+  it("returns the Trial Balance report body as received, with Debit and Credit columns intact", async () => {
+    const fixture = trialBalanceFixture();
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(fixture));
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      context(),
+    );
+
+    expect(result).toEqual({ ok: true, output: fixture });
+    expect(
+      (result.output as { Columns: { Column: Array<{ ColTitle: string }> } }).Columns.Column.map(
+        (column) => column.ColTitle,
+      ),
+    ).toEqual(["Account", "Debit", "Credit"]);
+    expect(result.output).not.toHaveProperty("rows");
+    expect(result.output).not.toHaveProperty("columns");
+  });
+
+  it("requests the connection's realm without collapsing the two money columns", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(trialBalanceFixture()));
+    vi.stubGlobal("fetch", fetch);
+
+    await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Cash" },
+      context(),
+    );
+
+    const url = new URL(String(fetch.mock.calls[0]?.[0]));
+    expect(url.origin + url.pathname).toBe(
+      `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/reports/TrialBalance`,
+    );
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      start_date: "2026-01-01",
+      end_date: "2026-05-31",
+      accounting_method: "Cash",
+    });
+    expect(url.searchParams.has("summarize_column_by")).toBe(false);
+  });
+
+  it("rejects an oversized Trial Balance response rather than returning it", async () => {
+    const oversized = { ...trialBalanceFixture(), ignored: "x".repeat(2 * 1024 * 1024) };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(oversized)),
+    );
+
+    const result = await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      context(),
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "provider_response_too_large" } });
+  });
+
+  it("refuses a Trial Balance read without a QuickBooks connection", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      { getCredential: async () => undefined },
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "authorization_failed" } });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("uses the trusted production host only when the stored provider environment selects it", async () => {
@@ -515,6 +615,24 @@ describe("QuickBooks Online read-only pilot", () => {
         required: expect.arrayContaining(["report_name", "accounting_method", "start_date", "end_date"]),
       });
     }
+  });
+
+  it("publishes the Trial Balance action with the shared accounting scope and a passthrough output", () => {
+    const action = quickBooksOnlineActions.find((item) => item.name === "get_trial_balance");
+
+    expect(action?.id).toBe("quickbooks_online.get_trial_balance");
+    expect(action?.inputSchema).toMatchObject({
+      properties: {
+        as_of_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+        accounting_method: { enum: ["Cash", "Accrual"] },
+      },
+      required: ["as_of_date", "accounting_method"],
+    });
+    expect(action?.requiredScopes).toEqual(["com.intuit.quickbooks.accounting"]);
+    expect(action?.providerPermissions).toEqual(["com.intuit.quickbooks.accounting"]);
+    expect(action?.outputSchema).toMatchObject({ type: "object", additionalProperties: true });
+    expect(action?.outputSchema).not.toHaveProperty("properties");
+    expect(action?.description).toMatch(/provider's own report shape/);
   });
 });
 

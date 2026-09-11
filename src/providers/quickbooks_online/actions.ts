@@ -64,6 +64,10 @@ const reportOutput = s.object(
   { optional: ["as_of_date", "currency"], defs: { reportRow } },
 );
 
+const trialBalanceOutput = s.unknownObject(
+  "Intuit's TrialBalance report response as received, including its Debit and Credit columns.",
+);
+
 export const quickBooksOnlineActions: readonly ProviderActionDefinition[] = [
   defineProviderAction(service, {
     name: "get_company_info",
@@ -94,6 +98,23 @@ export const quickBooksOnlineActions: readonly ProviderActionDefinition[] = [
       { required: ["as_of_date", "accounting_method"] },
     ),
     outputSchema: reportOutput,
+    requiredScopes: permissions,
+    providerPermissions: permissions,
+  }),
+  defineProviderAction(service, {
+    name: "get_trial_balance",
+    description:
+      "Get a QuickBooks Online Trial Balance report in the provider's own report shape. " +
+      "The response is Intuit's report body as received, with its Debit and Credit columns and " +
+      "nested row structure intact, because the consumer of a trial balance parses that shape " +
+      "directly. Unlike the Profit and Loss and Balance Sheet actions, this action performs no " +
+      "normalization, and normalizing it would break that consumer.",
+    inputSchema: s.object(
+      "Required Trial Balance report parameters.",
+      { as_of_date: date, accounting_method: accountingMethod },
+      { required: ["as_of_date", "accounting_method"] },
+    ),
+    outputSchema: trialBalanceOutput,
     requiredScopes: permissions,
     providerPermissions: permissions,
   }),
