@@ -372,6 +372,25 @@ describe("QuickBooks Online read-only pilot", () => {
     expect(url.searchParams.has("summarize_column_by")).toBe(false);
   });
 
+  it("sends a range start that Intuit ignores, so the as-of date alone selects the data", async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(trialBalanceFixture()));
+    vi.stubGlobal("fetch", fetch);
+
+    await executors["quickbooks_online.get_trial_balance"]!(
+      { as_of_date: "2026-05-31", accounting_method: "Accrual" },
+      context(),
+    );
+
+    // Intuit rejects a report request carrying no period, and then ignores the
+    // start it was given: the same as-of date returns the same rows whatever the
+    // range start, so the start exists to make the request valid and nothing
+    // more. Sending the as-of year's January 1 keeps it obviously inert rather
+    // than implying a window a reader might try to tune.
+    const url = new URL(String(fetch.mock.calls[0]?.[0]));
+    expect(url.searchParams.get("start_date")).toBe("2026-01-01");
+    expect(url.searchParams.get("end_date")).toBe("2026-05-31");
+  });
+
   it("rejects an oversized Trial Balance response rather than returning it", async () => {
     const oversized = { ...trialBalanceFixture(), ignored: "x".repeat(2 * 1024 * 1024) };
     vi.stubGlobal(

@@ -99,9 +99,11 @@ because Intuit's report service requires an explicit period or a date macro
 rather than a bare as-of date.
 
 Only the end of that range selects data. Varying `start_date` from 2000-01-01 to
-a two-day window, against a fixed `end_date`, returns byte-identical rows.
+a two-day window, against a fixed `end_date`, returns byte-identical rows, and
+that holds whether or not the company has transactions in an earlier financial
+year.
 
-Balances are reported as of `end_date`, on QuickBooks' own two-tier convention:
+Balances are reported as of `end_date`, on QuickBooks' two-tier convention:
 asset, liability and equity balances carry forward across financial years, while
 income and expense accounts are reported for the financial year containing
 `end_date`, because a prior year's profit and loss is closed into retained
@@ -110,12 +112,13 @@ months therefore produce income and expense figures covering different spans,
 and comparing them requires adjustment. `get_company_info` reports
 `fiscal_year_start_month`, which is what a caller needs to detect that case.
 
-The financial-year scoping is QuickBooks' documented reporting convention rather
-than a behaviour this repository has measured: the captured fixture covers a
-single financial year, so it cannot distinguish year-scoped income rows from
-cumulative ones. Confirming it takes one pair of requests differing only in
-`end_date` across a year boundary, comparing an income account with activity in
-both years.
+Measured against a company carrying income in two financial years: an income
+account holding 2,250.00 before the test, credited a further 1,000.00 in the
+earlier year and 400.00 in the later one, reports 2,650.00 at an `end_date` in
+the later year — the later year's activity alone, not the 3,650.00 an
+inception-to-date balance would show. Retained earnings at that same `end_date`
+equals the earlier year's income exactly, which is where the difference goes,
+while a bank account's balance carries the full history forward.
 
 References:
 
