@@ -41,26 +41,28 @@ reasons:
 
 - A trial balance carries its amounts in native `Debit` and `Credit` columns,
   and is summed with an accounting sign convention read from those two columns.
-  The read therefore omits `summarize_column_by`, which would collapse them into
-  a single money column, and the normalized shape has nowhere to carry two money
-  columns per row.
+  The normalized shape has nowhere to carry two money columns per row.
 - Its consumer already parses Intuit's raw report shape, including the rule that
   only leaf rows are trial-balance lines and the checks that a report's own basis
   and period labels agree with what was requested. Projecting here would mean a
   second parser against a second shape for no behavioural gain.
 
-Intuit's report shape for this read has an account column of type `Account`,
-`Debit` and `Credit` money columns, one leaf row per account, and a trailing
-`GrandTotal` section row.
+The read leaves `summarize_column_by` unset, where the normalized reads pin it
+to `Total`. On this report the parameter selects nothing: the two money columns
+survive it, and the response is byte-identical with and without it. Omitting it
+keeps the request free of a control this report does not have.
 
-Every report response is served by Intuit's modernized report service. That
-service returns an empty string rather than a zero for an absent value, types an
-enclosing section row `Section` whether or not it is empty, returns column titles
-in Title Case, always returns `StartPeriod` and `EndPeriod`, generates row order
-dynamically so row index positions are not stable, always nests a child account
-under its parent, and does not support `qzurl`. A caller must key off row and
-column identity rather than position, and must not assume a column title is
-non-empty.
+Intuit's report shape for this read has an untitled account column of type
+`Account`, `Debit` and `Credit` money columns, one leaf row per account carrying
+Intuit's account identifier, and a trailing `GrandTotal` section row whose
+`Summary` wraps its cells in `ColData`. `Columns` and `Rows` each wrap their
+list in a single-key object. The fixture in `executors.test.ts` is a captured
+response, so it records these forms exactly.
+
+Two header fields do not mean what their names suggest. `SummarizeColumnsBy`
+reads `Total` even though the report keeps both money columns, and `StartPeriod`
+echoes the requested `start_date` rather than reporting a window the service
+applied.
 
 ### What bounds and redactions apply
 
@@ -83,19 +85,18 @@ The same request timeout, single transient retry, and OAuth refresh-and-replay
 handling cover this action, because it shares the read path with the normalized
 reads.
 
-### Period window
+### Period
 
 The read requests January 1 of the as-of year through the requested as-of date,
-matching Balance Sheet, because Intuit's report service requires an explicit
-period or a date macro rather than a bare as-of date.
+because Intuit's report service requires an explicit period or a date macro
+rather than a bare as-of date.
 
-Account balances are as-of values, but a trial balance also lists period-scoped
-income and expense accounts, so the window is load-bearing for those rows in a
-way it is not for a balance sheet. `Header.StartPeriod` reports the window Intuit
-actually applied, which is where a caller should read it from: whether those rows
-follow the requested `start_date` or the company's own financial-year start is
-Intuit's behaviour to determine, and `get_company_info` exposes
-`fiscal_year_start_month` so a caller can see when the two differ.
+Only the end of that range selects data. A trial balance reports cumulative
+balances as of `end_date`, including for income and expense accounts, and
+narrowing `start_date` to a two-day window returns byte-identical rows. The
+range start is therefore a required parameter with no effect on the result, and
+a caller does not need to reason about it or about the company's financial-year
+start.
 
 References:
 

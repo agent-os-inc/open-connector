@@ -133,10 +133,14 @@ async function getReport(context: QuickBooksContext, request: ReportRequest): Pr
  *
  * A trial balance carries its amounts in native Debit and Credit columns, and
  * its consumer sums them with an accounting sign convention read from those two
- * columns. `summarize_column_by=Total` collapses them into one money column, so
- * this read omits that parameter, and the response is returned unprojected: the
- * normalized column-and-row-tree shape the Profit and Loss and Balance Sheet
- * reads emit has no place to carry two money columns per row.
+ * columns. The response is returned unprojected because the normalized
+ * column-and-row-tree shape the Profit and Loss and Balance Sheet reads emit has
+ * no place to carry two money columns per row.
+ *
+ * `summarize_column_by` is left unset. The sibling reads pin it to `Total`, but
+ * on this report it selects nothing: a trial balance is already summarized that
+ * way, and the parameter neither collapses the two money columns nor changes the
+ * response, so sending it would only imply a control this report does not have.
  *
  * Only the response byte cap bounds this read. The row-depth, cell-count and
  * cell-length limits live in the projection the sibling reads perform, so a
